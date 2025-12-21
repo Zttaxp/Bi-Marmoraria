@@ -1,189 +1,114 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState } from 'react'
 import { createClient } from './utils/supabase/client'
-import { 
-  LayoutDashboard, Calculator, CalendarDays, Users, Upload, CheckCircle, Loader2, LogOut 
-} from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Lock, Mail, Loader2, AlertCircle } from 'lucide-react'
+import Image from 'next/image' // Importante para otimizar imagens
 
-// Imports dos Componentes
-import FileUpload from '@/components/FileUpload'
-import DashboardOverview from '@/components/DashboardOverview'
-import RevenueChart from '@/components/RevenueChart'
-import FinancialSimulator from '@/components/FinancialSimulator'
-import SellerAnalysis from '@/components/SellerAnalysis'
-import AnnualReport from '@/components/AnnualReport'
-import ClearDataButton from '@/components/ClearDataButton'
-import DateRangeFilter from '@/components/DateRangeFilter'
-import MaterialRanking from '@/components/MaterialRanking'
-
-export default function Home() {
+export default function LoginPage() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [msg, setMsg] = useState('')
+  
   const router = useRouter()
   const supabase = createClient()
-  
-  const [user, setUser] = useState<any>(null)
-  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'annual' | 'sellers'>('overview')
-  const [dataLoaded, setDataLoaded] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
-  const [allSalesData, setAllSalesData] = useState<any[]>([]) 
-  
-  // Estados de Filtro
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [filterMode, setFilterMode] = useState<'month' | 'range'>('month')
 
-  // 1. Auth & Data Fetch
-  useEffect(() => {
-    const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
-      setUser(user)
-      
-      let allRows: any[] = []
-      let from = 0
-      const step = 1000
-      let hasMore = true
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setMsg('')
 
-      while (hasMore) {
-        const { data, error } = await supabase.from('sales_records').select('*').range(from, from + step - 1)
-        if (error || !data || data.length === 0) { hasMore = false } 
-        else { allRows = [...allRows, ...data]; from += step; if (data.length < step) hasMore = false }
-      }
-
-      if (allRows.length > 0) {
-        allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
-        const start = new Date(allRows[0].sale_date).toISOString().split('T')[0]
-        const end = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
-        setStartDate(start)
-        setEndDate(end)
-        setAllSalesData(allRows)
-        setDataLoaded(true)
-      }
-      setIsLoading(false)
-    }
-    init()
-  }, [])
-
-  const handleLogout = async () => { await supabase.auth.signOut(); router.push('/login') }
-
-  // Filtro de Data
-  const getFilteredData = () => {
-      if (!startDate || !endDate) return allSalesData
-      const start = new Date(startDate)
-      const end = new Date(endDate)
-      end.setHours(23, 59, 59, 999)
-      return allSalesData.filter(item => {
-          const itemDate = new Date(item.sale_date)
-          return itemDate >= start && itemDate <= end
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       })
+      
+      if (error) {
+        throw new Error('Email ou senha incorretos.')
+      }
+      
+      router.push('/')
+    } catch (err: any) {
+      setMsg(err.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const filteredData = getFilteredData()
-
-  // === AQUI ESTÁ A CORREÇÃO MÁGICA ===
-  // Agora separamos: gross (Receita), costChapa (Só custo) e costFreight (Só frete)
-  const currentFinancials = useMemo(() => {
-      return filteredData.reduce((acc, item) => ({
-          gross: acc.gross + Number(item.revenue || 0),
-          // O segredo: Somar colunas separadas
-          costChapa: acc.costChapa + Number(item.cost || 0),     
-          costFreight: acc.costFreight + Number(item.freight || 0) 
-      }), { gross: 0, costChapa: 0, costFreight: 0 })
-  }, [filteredData])
-
-  // Identificador do mês para salvar os dados manuais
-  const currentMonthKey = useMemo(() => {
-      if (filterMode === 'month' && startDate) {
-          return startDate.substring(0, 7) // '2025-01'
-      }
-      return ''
-  }, [startDate, filterMode])
-
-  if (isLoading) return (<div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-400"><Loader2 className="w-10 h-10 animate-spin mb-4 text-cyan-600" /><p>Carregando sistema seguro...</p></div>)
-
   return (
-    <main className="min-h-screen bg-slate-50 flex flex-col items-center">
-      <div className="w-full bg-white border-b border-slate-200 px-6 py-4 shadow-sm z-10 sticky top-0">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-          <div>
-            <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <span className="bg-cyan-600 text-white px-2 py-1 rounded text-sm">BI</span> Marmoraria
-            </h1>
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border border-slate-100">
+        
+        {/* LOGO DA EMPRESA */}
+        <div className="text-center mb-8">
+          <div className="flex justify-center mb-4">
+             {/* AQUI ESTÁ A LOGO */}
+             <img 
+                src="/logo.png" 
+                alt="Logo Grupo LD" 
+                className="h-20 w-auto object-contain" 
+             />
           </div>
-          {!dataLoaded && (<div className="w-full md:w-auto"><FileUpload /></div>)}
-          {dataLoaded && (
-             <div className="flex gap-4 items-center flex-wrap justify-center">
-                <span className="hidden lg:flex text-xs font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 items-center gap-1"><CheckCircle size={12} /> {allSalesData.length.toLocaleString()} Reg.</span>
-                <div className="flex bg-slate-100 p-1 rounded-lg">
-                    <TabButton active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} icon={<LayoutDashboard size={16}/>} label="Geral" />
-                    <TabButton active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} icon={<Calculator size={16}/>} label="Simulador" />
-                    <TabButton active={activeTab === 'annual'} onClick={() => setActiveTab('annual')} icon={<CalendarDays size={16}/>} label="Anual" />
-                    <TabButton active={activeTab === 'sellers'} onClick={() => setActiveTab('sellers')} icon={<Users size={16}/>} label="Vendedores" />
-                </div>
-                <div className="flex items-center gap-1 border-l border-slate-200 pl-4 ml-2">
-                    <ClearDataButton />
-                    <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Sair"><LogOut size={20} /></button>
-                </div>
-             </div>
-          )}
+          <h1 className="text-2xl font-bold text-slate-800">BI Marmoraria</h1>
+          <p className="text-slate-400 text-sm">Acesso restrito a usuários autorizados</p>
         </div>
-      </div>
 
-      <div className="w-full max-w-7xl p-6 mb-12 min-h-[500px]">
-        {!dataLoaded && !isLoading && (
-            <div className="text-center mt-20 text-slate-400"><Upload className="w-12 h-12 mx-auto mb-4 opacity-20" /><p>Nenhum dado encontrado. Faça upload da planilha acima.</p></div>
-        )}
-
-        {/* GERAL */}
-        {dataLoaded && activeTab === 'overview' && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                <DateRangeFilter startDate={startDate} endDate={endDate} onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} onFilterModeChange={setFilterMode} />
-                <DashboardOverview data={filteredData} />
-                <MaterialRanking data={filteredData} />
-                <RevenueChart data={filteredData} />
+        {/* Formulário */}
+        <form onSubmit={handleLogin} className="space-y-5">
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">Email Corporativo</label>
+            <div className="relative mt-1">
+              <Mail className="absolute left-3 top-2.5 text-slate-400" size={18} />
+              <input 
+                type="email" 
+                required
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                className="w-full pl-10 p-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 outline-none text-slate-700"
+                placeholder="usuario@empresa.com"
+              />
             </div>
-        )}
+          </div>
 
-        {/* SIMULADOR (Corrigido o envio das props) */}
-        {dataLoaded && activeTab === 'financial' && (
-             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                <DateRangeFilter 
-                    startDate={startDate} 
-                    endDate={endDate} 
-                    onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} 
-                    onFilterModeChange={setFilterMode}
-                    onlyMonthMode={true} // Trava em mensal como você pediu
-                />
-                
-                <FinancialSimulator 
-                    grossRevenue={currentFinancials.gross} 
-                    costChapa={currentFinancials.costChapa}     // Agora envia o valor correto
-                    costFreight={currentFinancials.costFreight} // Agora envia o valor correto
-                    monthKey={currentMonthKey}
-                />
-             </div>
-        )}
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">Senha</label>
+            <div className="relative mt-1">
+              <Lock className="absolute left-3 top-2.5 text-slate-400" size={18} />
+              <input 
+                type="password" 
+                required
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="w-full pl-10 p-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 outline-none text-slate-700"
+                placeholder="******"
+              />
+            </div>
+          </div>
 
-        {/* ANUAL */}
-        {dataLoaded && activeTab === 'annual' && (<div className="animate-in fade-in slide-in-from-bottom-2"><AnnualReport data={allSalesData} /></div>)}
+          {msg && (
+            <div className="text-sm text-center p-3 rounded bg-red-50 text-red-600 border border-red-100 flex items-center justify-center gap-2">
+              <AlertCircle size={16}/> {msg}
+            </div>
+          )}
 
-        {/* VENDEDORES */}
-        {dataLoaded && activeTab === 'sellers' && (
-             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                <DateRangeFilter startDate={startDate} endDate={endDate} onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} onFilterModeChange={setFilterMode} />
-                <SellerAnalysis data={filteredData} showGoals={filterMode === 'month'} />
-             </div>
-        )}
+          <button 
+            disabled={loading}
+            className="w-full bg-slate-800 text-white font-bold py-3 rounded-lg hover:bg-slate-900 transition flex justify-center items-center gap-2 shadow-sm"
+          >
+            {loading ? <Loader2 className="animate-spin" size={18} /> : 'Entrar no Sistema'}
+          </button>
+        </form>
+
+        <div className="mt-8 pt-6 border-t border-slate-100 text-center">
+          <p className="text-xs text-slate-400">
+            Não tem acesso? Solicite ao administrador.
+          </p>
+        </div>
+
       </div>
-    </main>
+    </div>
   )
-}
-
-function TabButton({ active, onClick, icon, label }: any) {
-    return (
-        <button onClick={onClick} className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${active ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
-            {icon} <span className="hidden md:inline">{label}</span>
-        </button>
-    )
 }
