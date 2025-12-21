@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { Calculator, RefreshCcw, TrendingUp, TrendingDown, DollarSign, Lock, Unlock, MinusCircle, Equal, Save, Loader2, AlertCircle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Calculator, RefreshCcw, TrendingUp, TrendingDown, Settings, Save, Loader2, AlertCircle } from 'lucide-react'
 import { createClient } from '../app/utils/supabase/client'
 
 interface FinancialSimulatorProps {
@@ -29,291 +29,330 @@ export default function FinancialSimulator({
   
   const supabase = createClient()
   
-  // --- ESTADOS REAIS (BASE) ---
-  const [baseTaxRate, setBaseTaxRate] = useState(6.00) 
-  const [baseDefaultRate, setBaseDefaultRate] = useState(1.50) 
+  // --- PARÂMETROS GLOBAIS (Config Fixa) ---
+  const [globalTax, setGlobalTax] = useState(6.00)
+  const [globalDefault, setGlobalDefault] = useState(1.50)
+  const [globalCommission, setGlobalCommission] = useState(0)
+  const [isSavingGlobal, setIsSavingGlobal] = useState(false)
+
+  // --- DADOS MENSAIS (Custos Fixos/Var R$) ---
   const [baseFixedCost, setBaseFixedCost] = useState(0) 
-  const [baseOtherVarCost, setBaseOtherVarCost] = useState(0)
+  const [baseOtherVarCost, setBaseOtherVarCost] = useState(0) 
 
   // --- ESTADOS SIMULADOS ---
   const [simRevenue, setSimRevenue] = useState(grossRevenue)
   const [simCostChapa, setSimCostChapa] = useState(costChapa)
   const [simCostFreight, setSimCostFreight] = useState(costFreight)
+  
   const [simTaxRate, setSimTaxRate] = useState(6.00)
   const [simDefaultRate, setSimDefaultRate] = useState(1.50)
+  const [simCommissionRate, setSimCommissionRate] = useState(0)
+  
   const [simFixedCost, setSimFixedCost] = useState(0)
   const [simOtherVarCost, setSimOtherVarCost] = useState(0)
 
-  const [isSaving, setIsSaving] = useState(false)
-  const [isDataLoaded, setIsDataLoaded] = useState(false)
-
-  // 1. CARREGAR DADOS (REAL E SIMULADO)
+  // 1. CARREGAR DADOS GLOBAIS E MENSAIS
   useEffect(() => {
     const loadData = async () => {
-        setIsDataLoaded(false)
         if (!monthKey) return
         
-        const { data } = await supabase.from('financial_monthly_data').select('*').eq('month_key', monthKey).single()
+        const { data: { user } } = await supabase.auth.getUser()
+        if(!user) return
+
+        // A. Carregar Config Global
+        let { data: globalConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).single()
         
-        if (data) {
-            // Carrega Real
-            setBaseTaxRate(Number(data.tax_rate) || 0)
-            setBaseDefaultRate(Number(data.default_rate) || 0)
-            setBaseFixedCost(Number(data.fixed_cost) || 0)
-            setBaseOtherVarCost(Number(data.variable_cost) || 0)
-            
-            // Carrega Simulado (Se existir salvo, usa. Se não, espelha o real/csv)
-            setSimRevenue(data.sim_revenue !== null ? Number(data.sim_revenue) : grossRevenue)
-            setSimCostChapa(data.sim_cost_chapa !== null ? Number(data.sim_cost_chapa) : costChapa)
-            setSimCostFreight(data.sim_cost_freight !== null ? Number(data.sim_cost_freight) : costFreight)
-            setSimTaxRate(data.sim_tax_rate !== null ? Number(data.sim_tax_rate) : (Number(data.tax_rate) || 0))
-            setSimDefaultRate(data.sim_default_rate !== null ? Number(data.sim_default_rate) : (Number(data.default_rate) || 0))
-            setSimFixedCost(data.sim_fixed_cost !== null ? Number(data.sim_fixed_cost) : (Number(data.fixed_cost) || 0))
-            setSimOtherVarCost(data.sim_variable_cost !== null ? Number(data.sim_variable_cost) : (Number(data.variable_cost) || 0))
-        } else {
-            // Defaults se mês novo
-            setBaseTaxRate(6.0); setBaseDefaultRate(1.5); setBaseFixedCost(0); setBaseOtherVarCost(0);
-            setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight);
-            setSimTaxRate(6.0); setSimDefaultRate(1.5); setSimFixedCost(0); setSimOtherVarCost(0);
+        // Se não existir config global, cria uma padrão
+        if (!globalConfig) {
+            const defaults = { user_id: user.id, tax_rate: 6.0, default_rate: 1.5, commission_rate: 0 }
+            await supabase.from('financial_global_config').insert(defaults)
+            globalConfig = defaults
         }
-        setIsDataLoaded(true)
+
+        // Define estados globais
+        setGlobalTax(Number(globalConfig.tax_rate))
+        setGlobalDefault(Number(globalConfig.default_rate))
+        setGlobalCommission(Number(globalConfig.commission_rate))
+
+        // B. Carregar Dados do Mês Específico
+        const { data: monthData } = await supabase.from('financial_monthly_data').select('*').eq('month_key', monthKey).single()
+        
+        if (monthData) {
+            setBaseFixedCost(Number(monthData.fixed_cost) || 0)
+            setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
+            
+            // Simulado inicia com os valores salvos ou copia os globais/reais
+            setSimTaxRate(monthData.sim_tax_rate ?? globalConfig.tax_rate)
+            setSimDefaultRate(monthData.sim_default_rate ?? globalConfig.default_rate)
+            setSimCommissionRate(monthData.sim_commission_rate ?? globalConfig.commission_rate)
+            
+            setSimFixedCost(monthData.sim_fixed_cost ?? (Number(monthData.fixed_cost) || 0))
+            setSimOtherVarCost(monthData.sim_variable_cost ?? (Number(monthData.variable_cost) || 0))
+            
+            // Valores monetários simulados
+            setSimRevenue(monthData.sim_revenue ?? grossRevenue)
+            setSimCostChapa(monthData.sim_cost_chapa ?? costChapa)
+            setSimCostFreight(monthData.sim_cost_freight ?? costFreight)
+        } else {
+            // Mês novo: usa defaults
+            setBaseFixedCost(0)
+            setBaseOtherVarCost(0)
+            
+            setSimTaxRate(Number(globalConfig.tax_rate))
+            setSimDefaultRate(Number(globalConfig.default_rate))
+            setSimCommissionRate(Number(globalConfig.commission_rate))
+            setSimRevenue(grossRevenue)
+            setSimCostChapa(costChapa)
+            setSimCostFreight(costFreight)
+        }
     }
     loadData()
-  }, [monthKey]) // Removemos as deps de props aqui para evitar overwrite ao navegar, mas atenção abaixo
+  }, [monthKey, grossRevenue, costChapa, costFreight])
 
-  // 2. ATUALIZAR QUANDO CSV MUDA (Apenas se não tiver carregado dados customizados ainda)
-  // Isso garante que se você mudar de mês, ele obedece o DB. Se mudar o CSV, ele obedece o CSV.
-  useEffect(() => {
-    if (!isDataLoaded) {
-        setSimRevenue(grossRevenue)
-        setSimCostChapa(costChapa)
-        setSimCostFreight(costFreight)
-    }
-  }, [grossRevenue, costChapa, costFreight, isDataLoaded])
-
-  // 3. SALVAR TUDO (REAL + SIMULADO)
-  // Função centralizada que pega o estado atual + o valor novo que está sendo editado
-  const saveAll = async (updates: any) => {
-      if (!monthKey) return
-      setIsSaving(true)
-      
+  // 2. FUNÇÃO: SALVAR PARÂMETROS GLOBAIS
+  const saveGlobalParams = async () => {
+      setIsSavingGlobal(true)
       const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      await supabase.from('financial_global_config').upsert({
+          user_id: user.id,
+          tax_rate: globalTax,
+          default_rate: globalDefault,
+          commission_rate: globalCommission
+      })
+
+      // Atualiza registros mensais existentes
+      await supabase.from('financial_monthly_data')
+        .update({
+            tax_rate: globalTax,
+            default_rate: globalDefault,
+            commission_rate: globalCommission
+        })
+        .eq('user_id', user.id)
+
+      setSimTaxRate(globalTax)
+      setSimDefaultRate(globalDefault)
+      setSimCommissionRate(globalCommission)
       
-      // Mescla os valores atuais com as atualizações recebidas
+      setIsSavingGlobal(false)
+  }
+
+  // 3. FUNÇÃO: SALVAR DADOS DO MÊS
+  const saveMonthData = async (fix: number, otherVar: number, simUpdates: any = {}) => {
+      if (!monthKey) return
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
       const payload = {
-          user_id: user?.id,
+          user_id: user.id,
           month_key: monthKey,
-          // Real
-          tax_rate: updates.baseTaxRate ?? baseTaxRate,
-          default_rate: updates.baseDefaultRate ?? baseDefaultRate,
-          fixed_cost: updates.baseFixedCost ?? baseFixedCost,
-          variable_cost: updates.baseOtherVarCost ?? baseOtherVarCost,
-          // Simulado
-          sim_revenue: updates.simRevenue ?? simRevenue,
-          sim_cost_chapa: updates.simCostChapa ?? simCostChapa,
-          sim_cost_freight: updates.simCostFreight ?? simCostFreight,
-          sim_tax_rate: updates.simTaxRate ?? simTaxRate,
-          sim_default_rate: updates.simDefaultRate ?? simDefaultRate,
-          sim_variable_cost: updates.simOtherVarCost ?? simOtherVarCost,
-          sim_fixed_cost: updates.simFixedCost ?? simFixedCost
+          tax_rate: globalTax, 
+          default_rate: globalDefault,
+          commission_rate: globalCommission,
+          
+          fixed_cost: fix,
+          variable_cost: otherVar,
+          
+          sim_revenue: simUpdates.revenue ?? simRevenue,
+          sim_cost_chapa: simUpdates.chapa ?? simCostChapa,
+          sim_cost_freight: simUpdates.freight ?? simCostFreight,
+          sim_tax_rate: simUpdates.tax ?? simTaxRate,
+          sim_default_rate: simUpdates.def ?? simDefaultRate,
+          sim_commission_rate: simUpdates.comm ?? simCommissionRate,
+          sim_fixed_cost: simUpdates.fix ?? simFixedCost,
+          sim_variable_cost: simUpdates.otherVar ?? simOtherVarCost
       }
 
-      if (user) {
-          await supabase.from('financial_monthly_data').upsert(payload, { onConflict: 'user_id, month_key' })
-      }
-      setIsSaving(false)
+      await supabase.from('financial_monthly_data').upsert(payload, { onConflict: 'user_id, month_key' })
   }
 
-  // --- WRAPPERS DE ATUALIZAÇÃO ---
-  
-  // Atualiza Real
-  const updateBase = (setter: any, val: number, field: string) => {
-      setter(val)
-      saveAll({ [field]: val })
-  }
-
-  // Atualiza Simulado (Valor direto)
-  const updateSim = (setter: any, val: number, field: string) => {
-      setter(val)
-      saveAll({ [field]: val })
-  }
-
-  // Atualiza Simulado (Cálculo R$ <-> %)
-  // Se mudar %, calcula R$. Se mudar R$, salva R$. O banco guarda R$.
-  const handleSimVal = (val: number, setter: any, fieldName: string, type: 'val'|'pct') => {
-      let finalVal = 0
-      if(type === 'val') {
-          finalVal = val
-      } else {
-          finalVal = simRevenue * (val / 100)
-      }
-      setter(finalVal)
-      
-      // Se alterou a RECEITA, precisamos salvar a receita nova
-      if (fieldName === 'simRevenue') {
-          saveAll({ simRevenue: finalVal })
-      } else {
-          // Se alterou um custo (ex: chapa), salva o custo
-          saveAll({ [fieldName]: finalVal })
-      }
-  }
-
-  // --- CÁLCULOS ---
-  const calculateDRE = (rev: number, chapa: number, freight: number, otherVar: number, tax: number, def: number, fix: number) => {
+  // --- CÁLCULOS DRE ---
+  const calculateDRE = (
+      rev: number, chapa: number, freight: number, 
+      tax: number, def: number, comm: number, 
+      otherVarInfo: number, fix: number
+  ) => {
      const safeRev = rev || 0
+     
      const valTax = safeRev * (tax / 100)
      const valDef = safeRev * (def / 100)
      const netRevenue = safeRev - valTax - valDef
-     const totalDirect = (chapa || 0) + (freight || 0)
-     const grossProfit = netRevenue - totalDirect
-     const contribMargin = grossProfit - (otherVar || 0)
-     const marginPct = safeRev > 0 ? (contribMargin / safeRev) * 100 : 0
-     const netProfit = contribMargin - (fix || 0)
+     
+     const valComm = safeRev * (comm / 100)
+     
+     const grossProfit = netRevenue - (chapa || 0) - (freight || 0)
+     const finalContribMargin = grossProfit - valComm - (otherVarInfo || 0)
+
+     const marginPct = safeRev > 0 ? (finalContribMargin / safeRev) * 100 : 0
+     const netProfit = finalContribMargin - (fix || 0)
      const profitPct = safeRev > 0 ? (netProfit / safeRev) * 100 : 0
-     return { valTax, valDef, netRevenue, totalDirect, grossProfit, contribMargin, marginPct, netProfit, profitPct }
+
+     return { valTax, valDef, valComm, netRevenue, grossProfit, contribMargin: finalContribMargin, marginPct, netProfit, profitPct }
   }
 
-  const real = calculateDRE(grossRevenue, costChapa, costFreight, baseOtherVarCost, baseTaxRate, baseDefaultRate, baseFixedCost)
-  const sim = calculateDRE(simRevenue, simCostChapa, simCostFreight, simOtherVarCost, simTaxRate, simDefaultRate, simFixedCost)
+  const real = calculateDRE(grossRevenue, costChapa, costFreight, globalTax, globalDefault, globalCommission, baseOtherVarCost, baseFixedCost)
+  const sim = calculateDRE(simRevenue, simCostChapa, simCostFreight, simTaxRate, simDefaultRate, simCommissionRate, simOtherVarCost, simFixedCost)
 
   const diffProfit = sim.netProfit - real.netProfit
 
-  const resetValues = () => {
-    // Volta para o estado inicial (Real) e Salva
-    setSimRevenue(grossRevenue); 
-    setSimCostChapa(costChapa); 
-    setSimCostFreight(costFreight);
-    setSimOtherVarCost(baseOtherVarCost); 
-    setSimTaxRate(baseTaxRate); 
-    setSimDefaultRate(baseDefaultRate); 
-    setSimFixedCost(baseFixedCost);
-    
-    saveAll({
-        simRevenue: grossRevenue,
-        simCostChapa: costChapa,
-        simCostFreight: costFreight,
-        simOtherVarCost: baseOtherVarCost,
-        simTaxRate: baseTaxRate,
-        simDefaultRate: baseDefaultRate,
-        simFixedCost: baseFixedCost
-    })
+  // Handlers
+  const handleSimVal = (val: number, setter: any, type: 'val'|'pct', field: string) => {
+      const finalVal = type === 'val' ? val : simRevenue * (val / 100)
+      setter(finalVal)
+      const updates: any = {}
+      if(field === 'revenue') updates.revenue = finalVal
+      if(field === 'chapa') updates.chapa = finalVal
+      if(field === 'freight') updates.freight = finalVal
+      if(field === 'otherVar') updates.otherVar = finalVal
+      saveMonthData(baseFixedCost, baseOtherVarCost, updates)
+  }
+  
+  const handleSimPct = (val: number, setter: any, field: string) => {
+      setter(val)
+      const updates: any = {}
+      if(field === 'tax') updates.tax = val
+      if(field === 'def') updates.def = val
+      if(field === 'comm') updates.comm = val
+      saveMonthData(baseFixedCost, baseOtherVarCost, updates)
   }
 
-  const showWarning = (costChapa === 0 && costFreight === 0 && grossRevenue > 0)
+  const handleRealMonthUpdate = (val: number, setter: any, field: 'fix'|'var') => {
+      setter(val)
+      saveMonthData(field === 'fix' ? val : baseFixedCost, field === 'var' ? val : baseOtherVarCost)
+  }
+
+  const resetValues = () => {
+      setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight);
+      setSimTaxRate(globalTax); setSimDefaultRate(globalDefault); setSimCommissionRate(globalCommission);
+      setSimFixedCost(baseFixedCost); setSimOtherVarCost(baseOtherVarCost);
+      saveMonthData(baseFixedCost, baseOtherVarCost, {
+          revenue: grossRevenue, chapa: costChapa, freight: costFreight,
+          tax: globalTax, def: globalDefault, comm: globalCommission,
+          fix: baseFixedCost, otherVar: baseOtherVarCost
+      })
+  }
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-         <div className="flex items-center gap-3">
-            <div className="bg-cyan-100 p-2 rounded-lg text-cyan-700"><Calculator size={24} /></div>
-            <div>
-                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                    DRE Gerencial Interativo
-                    {monthKey && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded border border-green-200">Mês: {monthKey}</span>}
-                </h2>
-                <p className="text-sm text-slate-500">
-                    {monthKey ? 'Todas as alterações (Real e Simulado) são salvas automaticamente.' : 'Selecione um mês no filtro para habilitar o salvamento.'}
-                </p>
-            </div>
-         </div>
-         <div className="flex items-center gap-2">
-             {isSaving && <span className="text-xs text-slate-400 flex items-center gap-1 bg-slate-50 px-2 py-1 rounded"><Loader2 size={12} className="animate-spin"/> Salvando...</span>}
-             <button onClick={resetValues} className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-cyan-600 px-4 py-2 rounded-lg border hover:border-slate-200 transition">
-                <RefreshCcw size={16} /> Resetar Simulação
-             </button>
-         </div>
+      {/* --- SEÇÃO FIXA: PARÂMETROS GLOBAIS --- */}
+      <div className="bg-slate-800 text-white p-4 rounded-xl shadow-md border border-slate-700">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+              <div className="flex items-center gap-2">
+                  <Settings className="text-cyan-400" />
+                  <div>
+                      <h3 className="font-bold text-lg">Parâmetros do Cenário Real</h3>
+                      <p className="text-xs text-slate-400">Alterações aqui aplicam-se a <strong>TODOS</strong> os meses (passados e futuros).</p>
+                  </div>
+              </div>
+              <button 
+                onClick={saveGlobalParams} 
+                disabled={isSavingGlobal}
+                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition disabled:opacity-50"
+              >
+                  {isSavingGlobal ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>}
+                  Salvar Parâmetros Globais
+              </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <GlobalInput label="Impostos (%)" value={globalTax} onChange={setGlobalTax} />
+              <GlobalInput label="Inadimplência (%)" value={globalDefault} onChange={setGlobalDefault} />
+              <GlobalInput label="Comissões (%)" value={globalCommission} onChange={setGlobalCommission} />
+          </div>
       </div>
 
-      {showWarning && (
-          <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg flex items-center gap-2 text-yellow-800 text-sm">
-              <AlertCircle size={16}/>
-              <span>Atenção: Os custos de Chapa e Frete parecem estar zerados. Limpe o banco (Lixeira) e reenvie a planilha para corrigir.</span>
-          </div>
-      )}
+      {/* HEADER DO MÊS */}
+      <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+         <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+             DRE Mês: {monthKey || 'Selecione'}
+         </h2>
+         <button onClick={resetValues} className="text-sm font-bold text-slate-500 hover:text-cyan-600 flex items-center gap-2">
+            <RefreshCcw size={14} /> Resetar Simulação
+         </button>
+      </div>
 
       {/* --- TABELA DRE --- */}
       <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
           
           <div className="grid grid-cols-12 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase py-3 px-4">
               <div className="col-span-4">Descrição</div>
-              <div className="col-span-4 text-right pr-4 border-r border-slate-200">Cenário Real (Base)</div>
+              <div className="col-span-4 text-right pr-4 border-r border-slate-200">Cenário Real (Automático)</div>
               <div className="col-span-4 text-right pl-4 text-cyan-600">Cenário Simulado (Editável)</div>
           </div>
 
-          {/* Faturamento */}
           <DRELine 
              label=" (+) Faturamento Bruto" 
              realVal={grossRevenue} realPct={100} 
              simVal={simRevenue} simPct={100}
-             // Ao mudar Receita Simulada, chama handleSimVal passando 'simRevenue' como chave
-             onSimValChange={(v) => handleSimVal(v, setSimRevenue, 'simRevenue', 'val')}
+             onSimValChange={(v: number) => handleSimVal(v, setSimRevenue, 'val', 'revenue')}
              isHeader
           />
 
-          {/* DEDUÇÕES */}
           <DRELine 
              label=" (-) Impostos" 
-             realVal={real.valTax} realPct={baseTaxRate} 
+             realVal={real.valTax} realPct={globalTax} 
              simVal={sim.valTax} simPct={simTaxRate}
-             onRealPctChange={(v) => updateBase(setBaseTaxRate, v, 'baseTaxRate')}
-             onSimPctChange={(v) => updateSim(setSimTaxRate, v, 'simTaxRate')}
-             isPercentEditable readOnly={!monthKey} isNegative
+             onSimPctChange={(v: number) => handleSimPct(v, setSimTaxRate, 'tax')}
+             isPercentEditable isNegative
           />
           <DRELine 
-             label=" (-) Inadimplência / Devoluções" 
-             realVal={real.valDef} realPct={baseDefaultRate} 
+             label=" (-) Inadimplência" 
+             realVal={real.valDef} realPct={globalDefault} 
              simVal={sim.valDef} simPct={simDefaultRate}
-             onRealPctChange={(v) => updateBase(setBaseDefaultRate, v, 'baseDefaultRate')}
-             onSimPctChange={(v) => updateSim(setSimDefaultRate, v, 'simDefaultRate')}
-             isPercentEditable readOnly={!monthKey} isNegative
+             onSimPctChange={(v: number) => handleSimPct(v, setSimDefaultRate, 'def')}
+             isPercentEditable isNegative
           />
 
           <DREResult label=" (=) Receita Líquida" realVal={real.netRevenue} simVal={sim.netRevenue} baseRevenueReal={grossRevenue} baseRevenueSim={simRevenue} />
 
-          {/* Custos Diretos */}
           <DRELine 
              label=" (-) CMV (Custo Chapa)" 
              realVal={costChapa} realPct={grossRevenue > 0 ? costChapa/grossRevenue*100 : 0} 
              simVal={simCostChapa} simPct={simRevenue > 0 ? simCostChapa/simRevenue*100 : 0}
-             onSimValChange={(v) => handleSimVal(v, setSimCostChapa, 'simCostChapa', 'val')}
-             onSimPctChange={(v) => handleSimVal(v, setSimCostChapa, 'simCostChapa', 'pct')}
+             onSimValChange={(v: number) => handleSimVal(v, setSimCostChapa, 'val', 'chapa')}
+             onSimPctChange={(v: number) => handleSimVal(v, setSimCostChapa, 'pct', 'chapa')}
              isNegative
           />
           <DRELine 
-             label=" (-) Frete sobre Vendas" 
+             label=" (-) Frete" 
              realVal={costFreight} realPct={grossRevenue > 0 ? costFreight/grossRevenue*100 : 0} 
              simVal={simCostFreight} simPct={simRevenue > 0 ? simCostFreight/simRevenue*100 : 0}
-             onSimValChange={(v) => handleSimVal(v, setSimCostFreight, 'simCostFreight', 'val')}
-             onSimPctChange={(v) => handleSimVal(v, setSimCostFreight, 'simCostFreight', 'pct')}
+             onSimValChange={(v: number) => handleSimVal(v, setSimCostFreight, 'val', 'freight')}
+             onSimPctChange={(v: number) => handleSimVal(v, setSimCostFreight, 'pct', 'freight')}
              isNegative
           />
-
-          {/* Variáveis Mensais */}
+          
+          {/* NOVA LINHA: COMISSÕES (%) */}
           <DRELine 
-             label=" (-) Outros Custos Variáveis" 
+             label=" (-) Comissões" 
+             realVal={real.valComm} realPct={globalCommission} 
+             simVal={sim.valComm} simPct={simCommissionRate}
+             onSimPctChange={(v: number) => handleSimPct(v, setSimCommissionRate, 'comm')}
+             isPercentEditable isNegative
+          />
+
+          <DRELine 
+             label=" (-) Outros Custos Variáveis (R$)" 
              realVal={baseOtherVarCost} realPct={grossRevenue > 0 ? baseOtherVarCost/grossRevenue*100 : 0} 
              simVal={simOtherVarCost} simPct={simRevenue > 0 ? simOtherVarCost/simRevenue*100 : 0}
-             onRealValChange={(v) => updateBase(setBaseOtherVarCost, v, 'baseOtherVarCost')}
-             onSimValChange={(v) => handleSimVal(v, setSimOtherVarCost, 'simOtherVarCost', 'val')}
-             onSimPctChange={(v) => handleSimVal(v, setSimOtherVarCost, 'simOtherVarCost', 'pct')}
+             onRealValChange={(v: number) => handleRealMonthUpdate(v, setBaseOtherVarCost, 'var')}
+             onSimValChange={(v: number) => handleSimVal(v, setSimOtherVarCost, 'val', 'otherVar')}
              readOnly={!monthKey} isNegative
           />
 
           <DREResult label=" (=) Margem de Contribuição" realVal={real.contribMargin} simVal={sim.contribMargin} baseRevenueReal={grossRevenue} baseRevenueSim={simRevenue} isHighlight />
 
-          {/* Fixos Mensais */}
           <DRELine 
              label=" (-) Custos Fixos Mensais" 
              realVal={baseFixedCost} realPct={grossRevenue > 0 ? baseFixedCost/grossRevenue*100 : 0} 
              simVal={simFixedCost} simPct={simRevenue > 0 ? simFixedCost/simRevenue*100 : 0}
-             onRealValChange={(v) => updateBase(setBaseFixedCost, v, 'baseFixedCost')}
-             onSimValChange={(v) => updateSim(setSimFixedCost, v, 'simFixedCost')}
+             onRealValChange={(v: number) => handleRealMonthUpdate(v, setBaseFixedCost, 'fix')}
+             onSimValChange={(v: number) => handleSimVal(v, setSimFixedCost, 'val', 'fix')}
              readOnly={!monthKey} isNegative
           />
 
-          {/* Lucro Líquido */}
           <div className="grid grid-cols-12 bg-slate-800 text-white py-4 px-4 items-center">
               <div className="col-span-4 font-bold text-sm uppercase">(=) Lucro Líquido</div>
               <div className="col-span-4 flex justify-end gap-3 items-center pr-4 border-r border-slate-600">
@@ -326,17 +365,33 @@ export default function FinancialSimulator({
               </div>
           </div>
       </div>
-
+      
       <div className="flex justify-center mt-4">
           <div className={`px-6 py-2 rounded-full font-bold text-sm shadow-sm flex items-center gap-2 ${diffProfit >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
               Impacto da Simulação: {diffProfit > 0 ? <TrendingUp size={16}/> : <TrendingDown size={16}/>} {diffProfit > 0 ? '+' : ''}{diffProfit.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
           </div>
       </div>
+
     </div>
   )
 }
 
-// --- COMPONENTES AUXILIARES ---
+// --- SUB-COMPONENTES ---
+
+function GlobalInput({ label, value, onChange }: any) {
+    return (
+        <div className="bg-slate-700 p-3 rounded-lg border border-slate-600">
+            <label className="text-xs font-bold text-slate-300 uppercase block mb-1">{label}</label>
+            <input 
+                type="number" 
+                step="0.01"
+                value={value}
+                onChange={e => onChange(parseFloat(e.target.value) || 0)}
+                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white font-bold focus:ring-2 focus:ring-cyan-500 outline-none"
+            />
+        </div>
+    )
+}
 
 function DREResult({ label, realVal, simVal, baseRevenueReal, baseRevenueSim, isHighlight }: any) {
     const realPct = baseRevenueReal > 0 ? (realVal / baseRevenueReal * 100) : 0
@@ -350,23 +405,7 @@ function DREResult({ label, realVal, simVal, baseRevenueReal, baseRevenueSim, is
     )
 }
 
-interface DRELineProps {
-    label: string
-    realVal: number
-    realPct: number
-    simVal: number
-    simPct: number
-    onRealValChange?: (val: number) => void
-    onRealPctChange?: (val: number) => void
-    onSimValChange?: (val: number) => void
-    onSimPctChange?: (val: number) => void
-    isHeader?: boolean
-    isNegative?: boolean
-    readOnly?: boolean
-    isPercentEditable?: boolean
-}
-
-function DRELine({ label, realVal, realPct, simVal, simPct, onRealValChange, onRealPctChange, onSimValChange, onSimPctChange, isHeader, isNegative, readOnly, isPercentEditable }: DRELineProps) {
+function DRELine({ label, realVal, realPct, simVal, simPct, onRealValChange, onRealPctChange, onSimValChange, onSimPctChange, isHeader, isNegative, readOnly, isPercentEditable }: any) {
     const textColor = isHeader ? 'text-slate-800 font-bold' : isNegative ? 'text-red-500' : 'text-slate-600'
     return (
         <div className={`grid grid-cols-12 py-2 px-4 border-b border-slate-100 items-center hover:bg-slate-50 transition-colors`}>
