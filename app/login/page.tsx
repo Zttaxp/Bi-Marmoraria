@@ -29,22 +29,37 @@ export default function LoginPage() {
         throw new Error('Email ou senha incorretos.')
       }
       
-      router.push('/') // Manda pro Dashboard
+      // --- CORREÇÃO AQUI ---
+      router.refresh() // Força o Next.js a atualizar a sessão
+      router.push('/') // Redireciona para a Home
+      // ---------------------
+
     } catch (err: any) {
       setMsg(err.message)
-    } finally {
-      setLoading(false)
+      setLoading(false) // Para o loading apenas se der erro
     }
+    // Não paramos o loading no sucesso para evitar que o botão "pisque" antes de mudar de página
   }
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border border-slate-100">
         
-        {/* Cabeçalho */}
+        {/* LOGO DA EMPRESA */}
         <div className="text-center mb-8">
-          <div className="bg-cyan-100 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 text-cyan-700">
-            <Lock size={24} />
+          <div className="flex justify-center mb-4">
+             {/* Certifique-se que o arquivo logo.png está na pasta public */}
+             <img 
+                src="/logo.png" 
+                alt="Logo Grupo LD" 
+                className="h-20 w-auto object-contain"
+                onError={(e) => {
+                    // Fallback se a logo não existir: mostra ícone de cadeado
+                    e.currentTarget.style.display = 'none';
+                    const parent = e.currentTarget.parentElement;
+                    if(parent) parent.innerHTML = '<div class="bg-cyan-100 w-12 h-12 rounded-full flex items-center justify-center mx-auto text-cyan-700"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>'
+                }} 
+             />
           </div>
           <h1 className="text-2xl font-bold text-slate-800">BI Marmoraria</h1>
           <p className="text-slate-400 text-sm">Acesso restrito a usuários autorizados</p>
@@ -82,9 +97,8 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Mensagem de Erro */}
           {msg && (
-            <div className="text-sm text-center p-3 rounded bg-red-50 text-red-600 border border-red-100 flex items-center justify-center gap-2">
+            <div className="text-sm text-center p-3 rounded bg-red-50 text-red-600 border border-red-100 flex items-center justify-center gap-2 animate-in fade-in">
               <AlertCircle size={16}/> {msg}
             </div>
           )}
