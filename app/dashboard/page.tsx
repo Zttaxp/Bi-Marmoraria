@@ -5,7 +5,7 @@ import { Bar } from 'react-chartjs-2'
 // Importar registros do Chart.js...
 
 export default function Dashboard() {
-  const [sales, setSales] = useState([])
+  const [sales, setSales] = useState<any[]>([])
   const [kpis, setKpis] = useState({ gross: 0, profit: 0 })
   const supabase = createClient()
 
