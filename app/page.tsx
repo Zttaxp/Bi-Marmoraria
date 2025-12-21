@@ -1,65 +1,189 @@
-import Image from "next/image";
+'use client'
+
+import { useState, useEffect, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
+import { createClient } from './utils/supabase/client'
+import { 
+  LayoutDashboard, Calculator, CalendarDays, Users, Upload, CheckCircle, Loader2, LogOut 
+} from 'lucide-react'
+
+// Imports dos Componentes
+import FileUpload from '@/components/FileUpload'
+import DashboardOverview from '@/components/DashboardOverview'
+import RevenueChart from '@/components/RevenueChart'
+import FinancialSimulator from '@/components/FinancialSimulator'
+import SellerAnalysis from '@/components/SellerAnalysis'
+import AnnualReport from '@/components/AnnualReport'
+import ClearDataButton from '@/components/ClearDataButton'
+import DateRangeFilter from '@/components/DateRangeFilter'
+import MaterialRanking from '@/components/MaterialRanking'
 
 export default function Home() {
+  const router = useRouter()
+  const supabase = createClient()
+  
+  const [user, setUser] = useState<any>(null)
+  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'annual' | 'sellers'>('overview')
+  const [dataLoaded, setDataLoaded] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [allSalesData, setAllSalesData] = useState<any[]>([]) 
+  
+  // Estados de Filtro
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [filterMode, setFilterMode] = useState<'month' | 'range'>('month')
+
+  // 1. Auth & Data Fetch
+  useEffect(() => {
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { router.push('/login'); return }
+      setUser(user)
+      
+      let allRows: any[] = []
+      let from = 0
+      const step = 1000
+      let hasMore = true
+
+      while (hasMore) {
+        const { data, error } = await supabase.from('sales_records').select('*').range(from, from + step - 1)
+        if (error || !data || data.length === 0) { hasMore = false } 
+        else { allRows = [...allRows, ...data]; from += step; if (data.length < step) hasMore = false }
+      }
+
+      if (allRows.length > 0) {
+        allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
+        const start = new Date(allRows[0].sale_date).toISOString().split('T')[0]
+        const end = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
+        setStartDate(start)
+        setEndDate(end)
+        setAllSalesData(allRows)
+        setDataLoaded(true)
+      }
+      setIsLoading(false)
+    }
+    init()
+  }, [])
+
+  const handleLogout = async () => { await supabase.auth.signOut(); router.push('/login') }
+
+  // Filtro de Data
+  const getFilteredData = () => {
+      if (!startDate || !endDate) return allSalesData
+      const start = new Date(startDate)
+      const end = new Date(endDate)
+      end.setHours(23, 59, 59, 999)
+      return allSalesData.filter(item => {
+          const itemDate = new Date(item.sale_date)
+          return itemDate >= start && itemDate <= end
+      })
+  }
+
+  const filteredData = getFilteredData()
+
+  // === AQUI ESTÁ A CORREÇÃO MÁGICA ===
+  // Agora separamos: gross (Receita), costChapa (Só custo) e costFreight (Só frete)
+  const currentFinancials = useMemo(() => {
+      return filteredData.reduce((acc, item) => ({
+          gross: acc.gross + Number(item.revenue || 0),
+          // O segredo: Somar colunas separadas
+          costChapa: acc.costChapa + Number(item.cost || 0),     
+          costFreight: acc.costFreight + Number(item.freight || 0) 
+      }), { gross: 0, costChapa: 0, costFreight: 0 })
+  }, [filteredData])
+
+  // Identificador do mês para salvar os dados manuais
+  const currentMonthKey = useMemo(() => {
+      if (filterMode === 'month' && startDate) {
+          return startDate.substring(0, 7) // '2025-01'
+      }
+      return ''
+  }, [startDate, filterMode])
+
+  if (isLoading) return (<div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-400"><Loader2 className="w-10 h-10 animate-spin mb-4 text-cyan-600" /><p>Carregando sistema seguro...</p></div>)
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="min-h-screen bg-slate-50 flex flex-col items-center">
+      <div className="w-full bg-white border-b border-slate-200 px-6 py-4 shadow-sm z-10 sticky top-0">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+          <div>
+            <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <span className="bg-cyan-600 text-white px-2 py-1 rounded text-sm">BI</span> Marmoraria
+            </h1>
+          </div>
+          {!dataLoaded && (<div className="w-full md:w-auto"><FileUpload /></div>)}
+          {dataLoaded && (
+             <div className="flex gap-4 items-center flex-wrap justify-center">
+                <span className="hidden lg:flex text-xs font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 items-center gap-1"><CheckCircle size={12} /> {allSalesData.length.toLocaleString()} Reg.</span>
+                <div className="flex bg-slate-100 p-1 rounded-lg">
+                    <TabButton active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} icon={<LayoutDashboard size={16}/>} label="Geral" />
+                    <TabButton active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} icon={<Calculator size={16}/>} label="Simulador" />
+                    <TabButton active={activeTab === 'annual'} onClick={() => setActiveTab('annual')} icon={<CalendarDays size={16}/>} label="Anual" />
+                    <TabButton active={activeTab === 'sellers'} onClick={() => setActiveTab('sellers')} icon={<Users size={16}/>} label="Vendedores" />
+                </div>
+                <div className="flex items-center gap-1 border-l border-slate-200 pl-4 ml-2">
+                    <ClearDataButton />
+                    <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Sair"><LogOut size={20} /></button>
+                </div>
+             </div>
+          )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+      </div>
+
+      <div className="w-full max-w-7xl p-6 mb-12 min-h-[500px]">
+        {!dataLoaded && !isLoading && (
+            <div className="text-center mt-20 text-slate-400"><Upload className="w-12 h-12 mx-auto mb-4 opacity-20" /><p>Nenhum dado encontrado. Faça upload da planilha acima.</p></div>
+        )}
+
+        {/* GERAL */}
+        {dataLoaded && activeTab === 'overview' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                <DateRangeFilter startDate={startDate} endDate={endDate} onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} onFilterModeChange={setFilterMode} />
+                <DashboardOverview data={filteredData} />
+                <MaterialRanking data={filteredData} />
+                <RevenueChart data={filteredData} />
+            </div>
+        )}
+
+        {/* SIMULADOR (Corrigido o envio das props) */}
+        {dataLoaded && activeTab === 'financial' && (
+             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                <DateRangeFilter 
+                    startDate={startDate} 
+                    endDate={endDate} 
+                    onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} 
+                    onFilterModeChange={setFilterMode}
+                    onlyMonthMode={true} // Trava em mensal como você pediu
+                />
+                
+                <FinancialSimulator 
+                    grossRevenue={currentFinancials.gross} 
+                    costChapa={currentFinancials.costChapa}     // Agora envia o valor correto
+                    costFreight={currentFinancials.costFreight} // Agora envia o valor correto
+                    monthKey={currentMonthKey}
+                />
+             </div>
+        )}
+
+        {/* ANUAL */}
+        {dataLoaded && activeTab === 'annual' && (<div className="animate-in fade-in slide-in-from-bottom-2"><AnnualReport data={allSalesData} /></div>)}
+
+        {/* VENDEDORES */}
+        {dataLoaded && activeTab === 'sellers' && (
+             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                <DateRangeFilter startDate={startDate} endDate={endDate} onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} onFilterModeChange={setFilterMode} />
+                <SellerAnalysis data={filteredData} showGoals={filterMode === 'month'} />
+             </div>
+        )}
+      </div>
+    </main>
+  )
+}
+
+function TabButton({ active, onClick, icon, label }: any) {
+    return (
+        <button onClick={onClick} className={`flex items-center gap-2 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${active ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+            {icon} <span className="hidden md:inline">{label}</span>
+        </button>
+    )
 }
