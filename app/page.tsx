@@ -7,6 +7,7 @@ import {
   LayoutDashboard, Calculator, CalendarDays, Users, Upload, CheckCircle, Loader2, LogOut 
 } from 'lucide-react'
 
+// Imports dos Componentes
 import FileUpload from '@/components/FileUpload'
 import DashboardOverview from '@/components/DashboardOverview'
 import RevenueChart from '@/components/RevenueChart'
@@ -32,10 +33,10 @@ export default function Home() {
   const [endDate, setEndDate] = useState('')
   const [filterMode, setFilterMode] = useState<'month' | 'range'>('month')
 
-  // 1. Auth & Data Fetch & Recuperação de Estado
+  // 1. Auth & Data Fetch & Persistência
   useEffect(() => {
     const init = async () => {
-      // A. Recuperar dados salvos no navegador (Aba, Datas, Modo)
+      // Recuperar aba e filtros salvos
       const savedTab = localStorage.getItem('bi_active_tab')
       const savedFilter = localStorage.getItem('bi_filters')
       
@@ -71,7 +72,6 @@ export default function Home() {
       if (allRows.length > 0) {
         allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
         
-        // Se não tiver data salva no storage, usa a do banco
         if (!initialStart) {
             initialStart = new Date(allRows[0].sale_date).toISOString().split('T')[0]
             initialEnd = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
@@ -87,19 +87,11 @@ export default function Home() {
     init()
   }, [])
 
-  // Função Centralizada para mudar filtros e salvar na memória
   const handleFilterChange = (start: string, end: string, mode: 'month'|'range') => {
       setStartDate(start)
       setEndDate(end)
-      // Se mode vier undefined (ex: só mudou data), mantém o atual
       if(mode) setFilterMode(mode)
-      
-      // Salva no navegador
-      localStorage.setItem('bi_filters', JSON.stringify({
-          start, 
-          end, 
-          mode: mode || filterMode
-      }))
+      localStorage.setItem('bi_filters', JSON.stringify({ start, end, mode: mode || filterMode }))
   }
 
   const changeTab = (tab: any) => {
@@ -177,52 +169,53 @@ export default function Home() {
             <div className="text-center mt-20 text-slate-400"><Upload className="w-12 h-12 mx-auto mb-4 opacity-20" /><p>Nenhum dado encontrado. Faça upload da planilha acima.</p></div>
         )}
 
-        {/* GERAL */}
-        {dataLoaded && activeTab === 'overview' && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                <DateRangeFilter 
-                    startDate={startDate} endDate={endDate} 
-                    onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
-                    onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
-                />
-                <DashboardOverview data={filteredData} />
-                <MaterialRanking data={filteredData} />
-                <RevenueChart data={filteredData} />
-            </div>
-        )}
+        {/* SOLUÇÃO: Usamos 'hidden' em vez de renderização condicional.
+            Isso mantém os componentes "vivos" (montados) com seu estado preservado.
+        */}
 
-        {/* SIMULADOR */}
-        {dataLoaded && activeTab === 'financial' && (
-             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                <DateRangeFilter 
-                    startDate={startDate} endDate={endDate} 
-                    onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
-                    onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
-                    onlyMonthMode={true} 
-                />
-                <FinancialSimulator 
-                    grossRevenue={currentFinancials.gross + currentFinancials.costFreight} 
-                    costChapa={currentFinancials.costChapa}     
-                    costFreight={currentFinancials.costFreight} 
-                    monthKey={currentMonthKey}
-                />
-             </div>
-        )}
+        {/* ABA GERAL */}
+        <div className={activeTab === 'overview' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
+            <DateRangeFilter 
+                startDate={startDate} endDate={endDate} 
+                onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
+            />
+            <DashboardOverview data={filteredData} />
+            <MaterialRanking data={filteredData} />
+            <RevenueChart data={filteredData} />
+        </div>
 
-        {/* ANUAL */}
-        {dataLoaded && activeTab === 'annual' && (<div className="animate-in fade-in slide-in-from-bottom-2"><AnnualReport data={allSalesData} /></div>)}
+        {/* ABA SIMULADOR */}
+        <div className={activeTab === 'financial' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
+            <DateRangeFilter 
+                startDate={startDate} endDate={endDate} 
+                onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
+                onlyMonthMode={true} 
+            />
+            <FinancialSimulator 
+                grossRevenue={currentFinancials.gross + currentFinancials.costFreight} 
+                costChapa={currentFinancials.costChapa}     
+                costFreight={currentFinancials.costFreight} 
+                monthKey={currentMonthKey}
+            />
+        </div>
 
-        {/* VENDEDORES */}
-        {dataLoaded && activeTab === 'sellers' && (
-             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                <DateRangeFilter 
-                    startDate={startDate} endDate={endDate} 
-                    onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
-                    onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
-                />
-                <SellerAnalysis data={filteredData} showGoals={filterMode === 'month'} />
-             </div>
-        )}
+        {/* ABA ANUAL */}
+        <div className={activeTab === 'annual' && dataLoaded ? 'block animate-in fade-in' : 'hidden'}>
+            <AnnualReport data={allSalesData} />
+        </div>
+
+        {/* ABA VENDEDORES */}
+        <div className={activeTab === 'sellers' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
+            <DateRangeFilter 
+                startDate={startDate} endDate={endDate} 
+                onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
+            />
+            <SellerAnalysis data={filteredData} showGoals={filterMode === 'month'} />
+        </div>
+
       </div>
     </main>
   )
