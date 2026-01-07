@@ -18,6 +18,13 @@ import ClearDataButton from '@/components/ClearDataButton'
 import DateRangeFilter from '@/components/DateRangeFilter'
 import MaterialRanking from '@/components/MaterialRanking'
 
+// Tipo auxiliar para o estado dos filtros
+type FilterState = {
+    start: string
+    end: string
+    mode: 'month' | 'range'
+}
+
 export default function Home() {
   const router = useRouter()
   const supabase = createClient()
@@ -28,37 +35,24 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true)
   const [allSalesData, setAllSalesData] = useState<any[]>([]) 
   
-  // Estados de Filtro
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [filterMode, setFilterMode] = useState<'month' | 'range'>('month')
+  // --- ESTADOS DE FILTRO INDEPENDENTES ---
+  // Agora cada aba tem sua própria memória de datas e modo
+  const [overviewFilter, setOverviewFilter] = useState<FilterState>({ start: '', end: '', mode: 'month' })
+  const [financialFilter, setFinancialFilter] = useState<FilterState>({ start: '', end: '', mode: 'month' })
+  const [sellersFilter, setSellersFilter] = useState<FilterState>({ start: '', end: '', mode: 'month' })
 
-  // 1. Auth & Data Fetch & Persistência
+  // 1. Auth & Data Fetch & Recuperação de Estado
   useEffect(() => {
     const init = async () => {
-      const savedTab = localStorage.getItem('bi_active_tab')
-      const savedFilter = localStorage.getItem('bi_filters')
-      
-      if (savedTab) setActiveTab(savedTab as any)
-      
-      let initialStart = ''
-      let initialEnd = ''
-      
-      // Default: mês
-      let initialMode: 'month' | 'range' = 'month'
-
-      if (savedFilter) {
-          const parsed = JSON.parse(savedFilter)
-          initialStart = parsed.start
-          initialEnd = parsed.end
-          initialMode = parsed.mode
-          setFilterMode(parsed.mode)
-      }
-
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.push('/login'); return }
       setUser(user)
+
+      // Recuperar Aba Ativa
+      const savedTab = localStorage.getItem('bi_active_tab')
+      if (savedTab) setActiveTab(savedTab as any)
       
+      // Carregar dados
       let allRows: any[] = []
       let from = 0
       const step = 1000
@@ -73,13 +67,21 @@ export default function Home() {
       if (allRows.length > 0) {
         allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
         
-        if (!initialStart) {
-            initialStart = new Date(allRows[0].sale_date).toISOString().split('T')[0]
-            initialEnd = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
+        // Datas padrão (primeiro e último registro)
+        const defaultStart = new Date(allRows[0].sale_date).toISOString().split('T')[0]
+        const defaultEnd = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
+        const defaultState: FilterState = { start: defaultStart, end: defaultEnd, mode: 'month' }
+
+        // Recuperar Filtros Salvos Individualmente
+        const loadFilter = (key: string) => {
+            const saved = localStorage.getItem(key)
+            return saved ? JSON.parse(saved) : defaultState
         }
 
-        setStartDate(initialStart)
-        setEndDate(initialEnd)
+        setOverviewFilter(loadFilter('bi_filter_overview'))
+        setFinancialFilter(loadFilter('bi_filter_financial'))
+        setSellersFilter(loadFilter('bi_filter_sellers'))
+
         setAllSalesData(allRows)
         setDataLoaded(true)
       }
@@ -88,17 +90,39 @@ export default function Home() {
     init()
   }, [])
 
-  // Função Centralizada para mudar filtros e salvar na memória
-  const handleFilterChange = (start: string, end: string, mode?: 'month'|'range') => {
-      setStartDate(start)
-      setEndDate(end)
+  // --- FUNÇÕES DE ATUALIZAÇÃO DE FILTRO (Com Persistência Individual) ---
+  
+  const updateOverview = (start: string, end: string, mode?: 'month'|'range') => {
+      const newMode = mode || overviewFilter.mode
+      // Se mudou data manualmente sem mudar modo, forçamos range se necessário, 
+      // mas o componente DateRangeFilter já nos manda o modo correto geralmente.
+      // Aqui vamos confiar no parâmetro mode se ele vier, ou manter o atual.
       
-      // Se um modo for passado explicitamente, usa ele.
-      // Se não, mantém o atual.
-      const newMode = mode || filterMode 
-      setFilterMode(newMode)
+      // Lógica extra: Se o usuário mexeu nas datas manualmente no datepicker (sem clicar nos botões de modo),
+      // o componente DateRangeFilter chama onDateChange. Nesse caso, podemos querer forçar 'range' se não for mês fechado.
+      // Mas para simplificar e obedecer o pedido anterior: 
+      // Se vier 'mode', usa 'mode'. Se não, se as datas mudaram, assume 'range' para garantir liberdade.
       
-      localStorage.setItem('bi_filters', JSON.stringify({ start, end, mode: newMode }))
+      const effectiveMode = mode ? mode : 'range' 
+      
+      const newState = { start, end, mode: effectiveMode }
+      setOverviewFilter(newState)
+      localStorage.setItem('bi_filter_overview', JSON.stringify(newState))
+  }
+
+  const updateFinancial = (start: string, end: string, mode?: 'month'|'range') => {
+      // Financeiro é sempre mensal, mas mantemos a estrutura
+      const newState = { start, end, mode: 'month' as const }
+      setFinancialFilter(newState)
+      localStorage.setItem('bi_filter_financial', JSON.stringify(newState))
+  }
+
+  const updateSellers = (start: string, end: string, mode?: 'month'|'range') => {
+      // Se o usuário mudou as datas (mode undefined), forçamos 'range' para desligar as metas
+      const effectiveMode = mode ? mode : 'range'
+      const newState = { start, end, mode: effectiveMode }
+      setSellersFilter(newState)
+      localStorage.setItem('bi_filter_sellers', JSON.stringify(newState))
   }
 
   const changeTab = (tab: any) => {
@@ -108,15 +132,19 @@ export default function Home() {
 
   const handleLogout = async () => { 
       localStorage.removeItem('bi_active_tab')
-      localStorage.removeItem('bi_filters')
+      localStorage.removeItem('bi_filter_overview')
+      localStorage.removeItem('bi_filter_financial')
+      localStorage.removeItem('bi_filter_sellers')
       await supabase.auth.signOut()
       router.push('/login') 
   }
 
-  const getFilteredData = () => {
-      if (!startDate || !endDate) return allSalesData
-      const start = new Date(startDate)
-      const end = new Date(endDate)
+  // --- FILTRAGEM DE DADOS (3 VIEWS DIFERENTES) ---
+  
+  const filterData = (filter: FilterState) => {
+      if (!filter.start || !filter.end) return allSalesData
+      const start = new Date(filter.start)
+      const end = new Date(filter.end)
       end.setHours(23, 59, 59, 999)
       return allSalesData.filter(item => {
           const itemDate = new Date(item.sale_date)
@@ -124,22 +152,26 @@ export default function Home() {
       })
   }
 
-  const filteredData = getFilteredData()
+  const dataOverview = useMemo(() => filterData(overviewFilter), [allSalesData, overviewFilter])
+  const dataFinancial = useMemo(() => filterData(financialFilter), [allSalesData, financialFilter])
+  const dataSellers = useMemo(() => filterData(sellersFilter), [allSalesData, sellersFilter])
 
-  const currentFinancials = useMemo(() => {
-      return filteredData.reduce((acc, item) => ({
+  // Cálculos Específicos para o Simulador (baseado no filtro financeiro)
+  const financialMetrics = useMemo(() => {
+      return dataFinancial.reduce((acc, item) => ({
           gross: acc.gross + Number(item.revenue || 0),
           costChapa: acc.costChapa + Number(item.cost || 0),     
           costFreight: acc.costFreight + Number(item.freight || 0) 
       }), { gross: 0, costChapa: 0, costFreight: 0 })
-  }, [filteredData])
+  }, [dataFinancial])
 
-  const currentMonthKey = useMemo(() => {
-      if (filterMode === 'month' && startDate) {
-          return startDate.substring(0, 7) 
+  const financialMonthKey = useMemo(() => {
+      if (financialFilter.start) {
+          return financialFilter.start.substring(0, 7) 
       }
       return ''
-  }, [startDate, filterMode])
+  }, [financialFilter.start])
+
 
   if (isLoading) return (<div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-400"><Loader2 className="w-10 h-10 animate-spin mb-4 text-cyan-600" /><p>Carregando sistema seguro...</p></div>)
 
@@ -176,37 +208,40 @@ export default function Home() {
             <div className="text-center mt-20 text-slate-400"><Upload className="w-12 h-12 mx-auto mb-4 opacity-20" /><p>Nenhum dado encontrado. Faça upload da planilha acima.</p></div>
         )}
 
+        {/* SOLUÇÃO COMPLETA:
+            Cada aba agora tem seu próprio DateRangeFilter atrelado ao seu próprio estado (overviewFilter, financialFilter, sellersFilter).
+            Isso garante total independência.
+        */}
+
         {/* ABA GERAL */}
         <div className={activeTab === 'overview' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
-                startDate={startDate} endDate={endDate} 
-                // CORREÇÃO: Força 'range' ao mudar data manualmente
-                onDateChange={(s, e) => handleFilterChange(s, e, 'range')} 
-                onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
+                startDate={overviewFilter.start} endDate={overviewFilter.end} 
+                onDateChange={(s, e) => updateOverview(s, e)} 
+                onFilterModeChange={(m) => updateOverview(overviewFilter.start, overviewFilter.end, m)} 
             />
-            <DashboardOverview data={filteredData} />
-            <MaterialRanking data={filteredData} />
-            <RevenueChart data={filteredData} />
+            <DashboardOverview data={dataOverview} />
+            <MaterialRanking data={dataOverview} />
+            <RevenueChart data={dataOverview} />
         </div>
 
         {/* ABA SIMULADOR */}
         <div className={activeTab === 'financial' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
-                startDate={startDate} endDate={endDate} 
-                // Aqui mantemos 'month' se possível, mas o componente DateRangeFilter com onlyMonthMode cuida disso
-                onDateChange={(s, e) => handleFilterChange(s, e)} 
-                onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
+                startDate={financialFilter.start} endDate={financialFilter.end} 
+                onDateChange={(s, e) => updateFinancial(s, e)} 
+                onFilterModeChange={(m) => updateFinancial(financialFilter.start, financialFilter.end, m)} 
                 onlyMonthMode={true} 
             />
             <FinancialSimulator 
-                grossRevenue={currentFinancials.gross + currentFinancials.costFreight} 
-                costChapa={currentFinancials.costChapa}     
-                costFreight={currentFinancials.costFreight} 
-                monthKey={currentMonthKey}
+                grossRevenue={financialMetrics.gross + financialMetrics.costFreight} 
+                costChapa={financialMetrics.costChapa}     
+                costFreight={financialMetrics.costFreight} 
+                monthKey={financialMonthKey}
             />
         </div>
 
-        {/* ABA ANUAL */}
+        {/* ABA ANUAL (Não precisa de filtro de data, usa o ano interno) */}
         <div className={activeTab === 'annual' && dataLoaded ? 'block animate-in fade-in' : 'hidden'}>
             <AnnualReport data={allSalesData} />
         </div>
@@ -214,13 +249,15 @@ export default function Home() {
         {/* ABA VENDEDORES */}
         <div className={activeTab === 'sellers' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
-                startDate={startDate} endDate={endDate} 
-                // CORREÇÃO CRUCIAL: Se o usuário mudar a data, força o modo 'range'
-                onDateChange={(s, e) => handleFilterChange(s, e, 'range')} 
-                onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
+                startDate={sellersFilter.start} endDate={sellersFilter.end} 
+                // Aqui está a correção chave para as metas:
+                // Se o usuário mudar a data manualmente, o updateSellers força o modo 'range'.
+                // O SellerAnalysis recebe showGoals={sellersFilter.mode === 'month'}.
+                // Como 'range' != 'month', as metas somem.
+                onDateChange={(s, e) => updateSellers(s, e)} 
+                onFilterModeChange={(m) => updateSellers(sellersFilter.start, sellersFilter.end, m)} 
             />
-            {/* O showGoals agora será falso se a pessoa mudar as datas */}
-            <SellerAnalysis data={filteredData} showGoals={filterMode === 'month'} />
+            <SellerAnalysis data={dataSellers} showGoals={sellersFilter.mode === 'month'} />
         </div>
 
       </div>
