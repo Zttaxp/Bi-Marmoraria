@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
-import { CalendarDays, TrendingUp, TrendingDown, ArrowRightLeft, Loader2, Download } from 'lucide-react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { CalendarDays, ArrowRightLeft, Loader2, Download } from 'lucide-react'
 import { createClient } from '../app/utils/supabase/client'
 import { Bar } from 'react-chartjs-2'
 import {
@@ -11,7 +11,8 @@ import * as XLSX from 'xlsx'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
-export default function AnnualReport({ data }: { data: any[] }) {
+// Adicionamos a prop isVisible
+export default function AnnualReport({ data, isVisible }: { data: any[], isVisible: boolean }) {
   const supabase = createClient()
   
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear())
@@ -32,26 +33,33 @@ export default function AnnualReport({ data }: { data: any[] }) {
       }
   }, [availableYears, selectedYear])
 
-  useEffect(() => {
-      const fetchFinancials = async () => {
-          setLoading(true)
-          const { data: { user } } = await supabase.auth.getUser()
-          
-          if (user) {
-             const { data: gConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).single()
-             setGlobalConfig(gConfig || { tax_rate: 6, default_rate: 1.5, commission_rate: 0 })
-          }
-
-          const { data: dbData } = await supabase.from('financial_monthly_data').select('*')
-          const map: Record<string, any> = {}
-          if (dbData) {
-              dbData.forEach((row: any) => { map[row.month_key] = row })
-          }
-          setFinancialData(map)
-          setLoading(false)
+  // Função de busca de dados isolada para poder ser chamada novamente
+  const fetchFinancials = useCallback(async () => {
+      // Não ativamos setLoading(true) aqui para não piscar a tela se já tiver dados
+      // Apenas atualizamos os números silenciosamente
+      
+      const { data: { user } } = await supabase.auth.getUser()
+      
+      if (user) {
+         const { data: gConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).single()
+         setGlobalConfig(gConfig || { tax_rate: 6, default_rate: 1.5, commission_rate: 0 })
       }
-      fetchFinancials()
-  }, [])
+
+      const { data: dbData } = await supabase.from('financial_monthly_data').select('*')
+      const map: Record<string, any> = {}
+      if (dbData) {
+          dbData.forEach((row: any) => { map[row.month_key] = row })
+      }
+      setFinancialData(map)
+      setLoading(false)
+  }, [supabase])
+
+  // Efeito principal: roda na montagem E quando a aba se torna visível
+  useEffect(() => {
+      if (isVisible) {
+          fetchFinancials()
+      }
+  }, [isVisible, fetchFinancials])
 
   const monthlyDRE = useMemo(() => {
       const months = Array.from({ length: 12 }, (_, i) => i + 1)
@@ -76,9 +84,6 @@ export default function AnnualReport({ data }: { data: any[] }) {
 
           let revenue, costChapa, costFreight, taxRate, defRate, commRate, otherVar, fixedCost
 
-          // Helper para fixo: se DB tiver valor (mesmo que 0 se foi intencional, mas assumindo NULL como padrão), use. Senão 85k.
-          // Como DB retorna null se não existe, e 0 se for 0.
-          // Lógica: Se existe registro no DB para o mês, usa o valor de lá. Se não, 85k.
           const dbFixed = dbRow.fixed_cost !== undefined && dbRow.fixed_cost !== null ? Number(dbRow.fixed_cost) : 85000
           
           if (viewMode === 'REAL') {

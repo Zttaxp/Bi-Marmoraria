@@ -7,6 +7,7 @@ import {
   LayoutDashboard, Calculator, CalendarDays, Users, Upload, CheckCircle, Loader2, LogOut 
 } from 'lucide-react'
 
+// Imports dos Componentes
 import FileUpload from '@/components/FileUpload'
 import DashboardOverview from '@/components/DashboardOverview'
 import RevenueChart from '@/components/RevenueChart'
@@ -44,7 +45,6 @@ export default function Home() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.push('/login'); return }
 
-      // Recuperar Aba Ativa
       const savedTab = localStorage.getItem('bi_active_tab')
       if (savedTab) setActiveTab(savedTab as any)
       
@@ -62,7 +62,6 @@ export default function Home() {
       if (allRows.length > 0) {
         allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
         
-        // Datas padrão
         const lastDate = new Date(allRows[allRows.length - 1].sale_date)
         const firstDayOfMonth = new Date(lastDate.getFullYear(), lastDate.getMonth(), 1).toISOString().split('T')[0]
         const lastDayOfMonth = lastDate.toISOString().split('T')[0]
@@ -93,30 +92,38 @@ export default function Home() {
     init()
   }, [])
 
-  // --- FUNÇÕES DE ATUALIZAÇÃO DE FILTRO (CORRIGIDAS) ---
+  // --- FUNÇÕES DE ATUALIZAÇÃO CORRIGIDAS (NOMES CERTOS) ---
   
-  const updateOverview = (start: string, end: string, mode?: 'month'|'range') => {
-      // Se mode for passado (clique no botão), usa ele. 
-      // Se não (mudança de data), mantém o modo atual.
-      const effectiveMode = mode ? mode : overviewFilter.mode
-      const newState = { start, end, mode: effectiveMode }
+  // 1. GERAL
+  const setOverviewDate = (start: string, end: string) => {
+      // Mantém o modo atual ao mudar a data (para não pular para 'range' indesejadamente)
+      const newState: FilterState = { start, end, mode: overviewFilter.mode }
+      setOverviewFilter(newState)
+      localStorage.setItem('bi_filter_overview', JSON.stringify(newState))
+  }
+  const setOverviewMode = (mode: 'month'|'range') => {
+      const newState = { ...overviewFilter, mode }
       setOverviewFilter(newState)
       localStorage.setItem('bi_filter_overview', JSON.stringify(newState))
   }
 
-  const updateFinancial = (start: string, end: string, mode?: 'month'|'range') => {
-      const newState = { start, end, mode: 'month' as const }
+  // 2. FINANCEIRO (Sempre 'month')
+  const setFinancialDate = (start: string, end: string) => {
+      const newState: FilterState = { start, end, mode: 'month' }
       setFinancialFilter(newState)
       localStorage.setItem('bi_filter_financial', JSON.stringify(newState))
   }
 
-  const updateSellers = (start: string, end: string, mode?: 'month'|'range') => {
-      // CORREÇÃO CRUCIAL AQUI:
-      // Antes: const effectiveMode = mode ? mode : 'range' (Isso forçava range ao mudar mês)
-      // Agora: Mantém o modo atual se apenas a data mudar.
-      const effectiveMode = mode ? mode : sellersFilter.mode
-      
-      const newState = { start, end, mode: effectiveMode }
+  // 3. VENDEDORES (Correção do Bug das Metas)
+  const setSellersDate = (start: string, end: string) => {
+      // CORREÇÃO: Mantém o modo atual (sellersFilter.mode).
+      // Assim, se você estiver em "Por Mês" e trocar a data, ele continua em "Por Mês" e mostra as metas.
+      const newState: FilterState = { start, end, mode: sellersFilter.mode }
+      setSellersFilter(newState)
+      localStorage.setItem('bi_filter_sellers', JSON.stringify(newState))
+  }
+  const setSellersMode = (mode: 'month'|'range') => {
+      const newState = { ...sellersFilter, mode }
       setSellersFilter(newState)
       localStorage.setItem('bi_filter_sellers', JSON.stringify(newState))
   }
@@ -195,8 +202,8 @@ export default function Home() {
         <div className={activeTab === 'overview' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={overviewFilter.start} endDate={overviewFilter.end} 
-                onDateChange={(s, e) => updateOverview(s, e)} 
-                onFilterModeChange={(m) => updateOverview(overviewFilter.start, overviewFilter.end, m)} 
+                onDateChange={setOverviewDate} 
+                onFilterModeChange={setOverviewMode} 
             />
             <DashboardOverview data={dataOverview} />
             <MaterialRanking data={dataOverview} />
@@ -207,8 +214,8 @@ export default function Home() {
         <div className={activeTab === 'financial' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={financialFilter.start} endDate={financialFilter.end} 
-                onDateChange={(s, e) => updateFinancial(s, e)} 
-                onFilterModeChange={(m) => updateFinancial(financialFilter.start, financialFilter.end, m)} 
+                onDateChange={setFinancialDate} 
+                onFilterModeChange={() => {}} 
                 onlyMonthMode={true} 
             />
             <FinancialSimulator 
@@ -221,15 +228,15 @@ export default function Home() {
 
         {/* ABA ANUAL */}
         <div className={activeTab === 'annual' && showContent ? 'block animate-in fade-in' : 'hidden'}>
-            <AnnualReport data={allSalesData} />
+            <AnnualReport data={allSalesData} isVisible={activeTab === 'annual'} />
         </div>
 
         {/* ABA VENDEDORES */}
         <div className={activeTab === 'sellers' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={sellersFilter.start} endDate={sellersFilter.end} 
-                onDateChange={(s, e) => updateSellers(s, e)} 
-                onFilterModeChange={(m) => updateSellers(sellersFilter.start, sellersFilter.end, m)} 
+                onDateChange={setSellersDate} 
+                onFilterModeChange={setSellersMode} 
             />
             <SellerAnalysis data={dataSellers} showGoals={sellersFilter.mode === 'month'} />
         </div>
