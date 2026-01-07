@@ -36,7 +36,8 @@ export default function FinancialSimulator({
   const [isSavingGlobal, setIsSavingGlobal] = useState(false)
 
   // --- DADOS MENSAIS (Custos Fixos/Var R$) ---
-  const [baseFixedCost, setBaseFixedCost] = useState(0) 
+  // ALTERAÇÃO 1: Iniciando com 85.000 de padrão
+  const [baseFixedCost, setBaseFixedCost] = useState(85000) 
   const [baseOtherVarCost, setBaseOtherVarCost] = useState(0) 
 
   // --- ESTADOS SIMULADOS ---
@@ -48,7 +49,8 @@ export default function FinancialSimulator({
   const [simDefaultRate, setSimDefaultRate] = useState(1.50)
   const [simCommissionRate, setSimCommissionRate] = useState(0)
   
-  const [simFixedCost, setSimFixedCost] = useState(0)
+  // ALTERAÇÃO 1: Iniciando com 85.000 de padrão
+  const [simFixedCost, setSimFixedCost] = useState(85000)
   const [simOtherVarCost, setSimOtherVarCost] = useState(0)
 
   // 1. CARREGAR DADOS GLOBAIS E MENSAIS
@@ -62,14 +64,12 @@ export default function FinancialSimulator({
         // A. Carregar Config Global
         let { data: globalConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).single()
         
-        // Se não existir config global, cria uma padrão
         if (!globalConfig) {
             const defaults = { user_id: user.id, tax_rate: 6.0, default_rate: 1.5, commission_rate: 0 }
             await supabase.from('financial_global_config').insert(defaults)
             globalConfig = defaults
         }
 
-        // Define estados globais
         setGlobalTax(Number(globalConfig.tax_rate))
         setGlobalDefault(Number(globalConfig.default_rate))
         setGlobalCommission(Number(globalConfig.commission_rate))
@@ -78,24 +78,24 @@ export default function FinancialSimulator({
         const { data: monthData } = await supabase.from('financial_monthly_data').select('*').eq('month_key', monthKey).single()
         
         if (monthData) {
-            setBaseFixedCost(Number(monthData.fixed_cost) || 0)
+            // Se existir no banco, usa o valor do banco. Se for null, usa 85000.
+            const loadedFix = monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000
+            setBaseFixedCost(loadedFix)
             setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
             
-            // Simulado inicia com os valores salvos ou copia os globais/reais
             setSimTaxRate(monthData.sim_tax_rate ?? globalConfig.tax_rate)
             setSimDefaultRate(monthData.sim_default_rate ?? globalConfig.default_rate)
             setSimCommissionRate(monthData.sim_commission_rate ?? globalConfig.commission_rate)
             
-            setSimFixedCost(monthData.sim_fixed_cost ?? (Number(monthData.fixed_cost) || 0))
+            setSimFixedCost(monthData.sim_fixed_cost ?? loadedFix)
             setSimOtherVarCost(monthData.sim_variable_cost ?? (Number(monthData.variable_cost) || 0))
             
-            // Valores monetários simulados
             setSimRevenue(monthData.sim_revenue ?? grossRevenue)
             setSimCostChapa(monthData.sim_cost_chapa ?? costChapa)
             setSimCostFreight(monthData.sim_cost_freight ?? costFreight)
         } else {
-            // Mês novo: usa defaults
-            setBaseFixedCost(0)
+            // Mês novo: usa defaults (85k fixo)
+            setBaseFixedCost(85000)
             setBaseOtherVarCost(0)
             
             setSimTaxRate(Number(globalConfig.tax_rate))
@@ -104,12 +104,13 @@ export default function FinancialSimulator({
             setSimRevenue(grossRevenue)
             setSimCostChapa(costChapa)
             setSimCostFreight(costFreight)
+            setSimFixedCost(85000)
         }
     }
     loadData()
   }, [monthKey, grossRevenue, costChapa, costFreight])
 
-  // 2. FUNÇÃO: SALVAR PARÂMETROS GLOBAIS
+  // 2. SALVAR PARÂMETROS GLOBAIS
   const saveGlobalParams = async () => {
       setIsSavingGlobal(true)
       const { data: { user } } = await supabase.auth.getUser()
@@ -122,7 +123,6 @@ export default function FinancialSimulator({
           commission_rate: globalCommission
       })
 
-      // Atualiza registros mensais existentes
       await supabase.from('financial_monthly_data')
         .update({
             tax_rate: globalTax,
@@ -138,7 +138,7 @@ export default function FinancialSimulator({
       setIsSavingGlobal(false)
   }
 
-  // 3. FUNÇÃO: SALVAR DADOS DO MÊS
+  // 3. SALVAR DADOS DO MÊS
   const saveMonthData = async (fix: number, otherVar: number, simUpdates: any = {}) => {
       if (!monthKey) return
       const { data: { user } } = await supabase.auth.getUser()
@@ -196,7 +196,7 @@ export default function FinancialSimulator({
 
   const diffProfit = sim.netProfit - real.netProfit
 
-  // Handlers
+  // Handlers para Valores Absolutos (R$)
   const handleSimVal = (val: number, setter: any, type: 'val'|'pct', field: string) => {
       const finalVal = type === 'val' ? val : simRevenue * (val / 100)
       setter(finalVal)
@@ -205,15 +205,30 @@ export default function FinancialSimulator({
       if(field === 'chapa') updates.chapa = finalVal
       if(field === 'freight') updates.freight = finalVal
       if(field === 'otherVar') updates.otherVar = finalVal
+      if(field === 'fix') updates.fix = finalVal
       saveMonthData(baseFixedCost, baseOtherVarCost, updates)
   }
   
+  // Handler para Porcentagens (%)
   const handleSimPct = (val: number, setter: any, field: string) => {
       setter(val)
       const updates: any = {}
       if(field === 'tax') updates.tax = val
       if(field === 'def') updates.def = val
       if(field === 'comm') updates.comm = val
+      saveMonthData(baseFixedCost, baseOtherVarCost, updates)
+  }
+
+  // ALTERAÇÃO 2: Novo Handler para editar R$ em campos que são Taxas
+  // Ele recebe o valor em R$, calcula a % e salva.
+  const handleSimValForRate = (val: number, setterPct: any, field: string) => {
+      const newPct = simRevenue > 0 ? (val / simRevenue) * 100 : 0
+      setterPct(newPct)
+      
+      const updates: any = {}
+      if(field === 'tax') updates.tax = newPct
+      if(field === 'def') updates.def = newPct
+      if(field === 'comm') updates.comm = newPct
       saveMonthData(baseFixedCost, baseOtherVarCost, updates)
   }
 
@@ -236,7 +251,7 @@ export default function FinancialSimulator({
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       
-      {/* --- SEÇÃO FIXA: PARÂMETROS GLOBAIS --- */}
+      {/* SEÇÃO FIXA */}
       <div className="bg-slate-800 text-white p-4 rounded-xl shadow-md border border-slate-700">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
               <div className="flex items-center gap-2">
@@ -290,18 +305,22 @@ export default function FinancialSimulator({
              isHeader
           />
 
+          {/* ALTERAÇÃO 2: Adicionado onSimValChange para Impostos */}
           <DRELine 
              label=" (-) Impostos" 
              realVal={real.valTax} realPct={globalTax} 
              simVal={sim.valTax} simPct={simTaxRate}
              onSimPctChange={(v: number) => handleSimPct(v, setSimTaxRate, 'tax')}
+             onSimValChange={(v: number) => handleSimValForRate(v, setSimTaxRate, 'tax')}
              isPercentEditable isNegative
           />
+          {/* ALTERAÇÃO 2: Adicionado onSimValChange para Inadimplência */}
           <DRELine 
              label=" (-) Inadimplência" 
              realVal={real.valDef} realPct={globalDefault} 
              simVal={sim.valDef} simPct={simDefaultRate}
              onSimPctChange={(v: number) => handleSimPct(v, setSimDefaultRate, 'def')}
+             onSimValChange={(v: number) => handleSimValForRate(v, setSimDefaultRate, 'def')}
              isPercentEditable isNegative
           />
 
@@ -324,12 +343,13 @@ export default function FinancialSimulator({
              isNegative
           />
           
-          {/* NOVA LINHA: COMISSÕES (%) */}
+          {/* ALTERAÇÃO 2: Adicionado onSimValChange para Comissões */}
           <DRELine 
              label=" (-) Comissões" 
              realVal={real.valComm} realPct={globalCommission} 
              simVal={sim.valComm} simPct={simCommissionRate}
              onSimPctChange={(v: number) => handleSimPct(v, setSimCommissionRate, 'comm')}
+             onSimValChange={(v: number) => handleSimValForRate(v, setSimCommissionRate, 'comm')}
              isPercentEditable isNegative
           />
 

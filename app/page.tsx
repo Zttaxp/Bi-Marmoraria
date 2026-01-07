@@ -33,9 +33,15 @@ export default function Home() {
   const [endDate, setEndDate] = useState('')
   const [filterMode, setFilterMode] = useState<'month' | 'range'>('month')
 
-  // 1. Auth & Data Fetch
+  // 1. Auth & Data Fetch & Persistência de Aba
   useEffect(() => {
     const init = async () => {
+      // A. Recuperar aba salva no navegador
+      const savedTab = localStorage.getItem('bi_active_tab')
+      if (savedTab) {
+          setActiveTab(savedTab as any)
+      }
+
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { router.push('/login'); return }
       setUser(user)
@@ -65,7 +71,17 @@ export default function Home() {
     init()
   }, [])
 
-  const handleLogout = async () => { await supabase.auth.signOut(); router.push('/login') }
+  // Função para trocar de aba e salvar no localStorage
+  const changeTab = (tab: 'overview' | 'financial' | 'annual' | 'sellers') => {
+      setActiveTab(tab)
+      localStorage.setItem('bi_active_tab', tab)
+  }
+
+  const handleLogout = async () => { 
+      localStorage.removeItem('bi_active_tab') // Limpa a aba salva ao sair
+      await supabase.auth.signOut()
+      router.push('/login') 
+  }
 
   // Filtro de Data
   const getFilteredData = () => {
@@ -114,10 +130,11 @@ export default function Home() {
              <div className="flex gap-4 items-center flex-wrap justify-center">
                 <span className="hidden lg:flex text-xs font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 items-center gap-1"><CheckCircle size={12} /> {allSalesData.length.toLocaleString()} Reg.</span>
                 <div className="flex bg-slate-100 p-1 rounded-lg">
-                    <TabButton active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} icon={<LayoutDashboard size={16}/>} label="Geral" />
-                    <TabButton active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} icon={<Calculator size={16}/>} label="Simulador" />
-                    <TabButton active={activeTab === 'annual'} onClick={() => setActiveTab('annual')} icon={<CalendarDays size={16}/>} label="Anual" />
-                    <TabButton active={activeTab === 'sellers'} onClick={() => setActiveTab('sellers')} icon={<Users size={16}/>} label="Vendedores" />
+                    {/* Botões atualizados para usar changeTab */}
+                    <TabButton active={activeTab === 'overview'} onClick={() => changeTab('overview')} icon={<LayoutDashboard size={16}/>} label="Geral" />
+                    <TabButton active={activeTab === 'financial'} onClick={() => changeTab('financial')} icon={<Calculator size={16}/>} label="Simulador" />
+                    <TabButton active={activeTab === 'annual'} onClick={() => changeTab('annual')} icon={<CalendarDays size={16}/>} label="Anual" />
+                    <TabButton active={activeTab === 'sellers'} onClick={() => changeTab('sellers')} icon={<Users size={16}/>} label="Vendedores" />
                 </div>
                 <div className="flex items-center gap-1 border-l border-slate-200 pl-4 ml-2">
                     <ClearDataButton />
@@ -143,7 +160,7 @@ export default function Home() {
             </div>
         )}
 
-        {/* SIMULADOR (CORRIGIDO: SOMA O FRETE DE VOLTA AO BRUTO) */}
+        {/* SIMULADOR */}
         {dataLoaded && activeTab === 'financial' && (
              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                 <DateRangeFilter 
@@ -151,11 +168,11 @@ export default function Home() {
                     endDate={endDate} 
                     onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} 
                     onFilterModeChange={setFilterMode}
-                    onlyMonthMode={true} // Trava em mensal como você pediu
+                    onlyMonthMode={true} 
                 />
                 
                 <FinancialSimulator 
-                    grossRevenue={currentFinancials.gross + currentFinancials.costFreight} // <--- AQUI ESTÁ A CORREÇÃO
+                    grossRevenue={currentFinancials.gross + currentFinancials.costFreight} 
                     costChapa={currentFinancials.costChapa}     
                     costFreight={currentFinancials.costFreight} 
                     monthKey={currentMonthKey}
