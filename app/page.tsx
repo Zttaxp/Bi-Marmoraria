@@ -17,7 +17,6 @@ import ClearDataButton from '@/components/ClearDataButton'
 import DateRangeFilter from '@/components/DateRangeFilter'
 import MaterialRanking from '@/components/MaterialRanking'
 
-// Definição clara do tipo
 type FilterState = {
     start: string
     end: string
@@ -32,8 +31,6 @@ export default function Home() {
   const [dataLoaded, setDataLoaded] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [allSalesData, setAllSalesData] = useState<any[]>([]) 
-  
-  // Estado que libera a visualização (evita piscar tela vazia)
   const [filtersReady, setFiltersReady] = useState(false)
   
   // Estados de Filtro Independentes
@@ -41,7 +38,7 @@ export default function Home() {
   const [financialFilter, setFinancialFilter] = useState<FilterState>({ start: '', end: '', mode: 'month' })
   const [sellersFilter, setSellersFilter] = useState<FilterState>({ start: '', end: '', mode: 'month' })
 
-  // 1. Auth & Data Fetch & Recuperação de Estado
+  // 1. Auth & Data Fetch
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser()
@@ -65,21 +62,20 @@ export default function Home() {
       if (allRows.length > 0) {
         allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
         
-        // Datas padrão (Mês atual dos dados)
+        // Datas padrão
         const lastDate = new Date(allRows[allRows.length - 1].sale_date)
         const firstDayOfMonth = new Date(lastDate.getFullYear(), lastDate.getMonth(), 1).toISOString().split('T')[0]
         const lastDayOfMonth = lastDate.toISOString().split('T')[0]
 
         const defaultState: FilterState = { start: firstDayOfMonth, end: lastDayOfMonth, mode: 'month' }
 
-        // Helper para carregar
         const getInitialFilter = (key: string): FilterState => {
             const saved = localStorage.getItem(key)
             if (saved) {
                 try {
                     const parsed = JSON.parse(saved)
-                    if (parsed.start && parsed.end && (parsed.mode === 'month' || parsed.mode === 'range')) return parsed
-                } catch (e) { console.error('Erro ao ler filtro', e) }
+                    if (parsed.start && parsed.end) return parsed
+                } catch (e) { console.error(e) }
             }
             return defaultState
         }
@@ -97,41 +93,30 @@ export default function Home() {
     init()
   }, [])
 
-  // --- FUNÇÕES DE ATUALIZAÇÃO SEGURAS ---
+  // --- FUNÇÕES DE ATUALIZAÇÃO DE FILTRO (CORRIGIDAS) ---
   
-  // Atualiza GERAL
-  const setOverviewDate = (start: string, end: string) => {
-      // Se mudou data manualmente, vira Range
-      const newState: FilterState = { start, end, mode: 'range' }
-      setOverviewFilter(newState)
-      localStorage.setItem('bi_filter_overview', JSON.stringify(newState))
-  }
-  const setOverviewMode = (mode: 'month'|'range') => {
-      // Se clicou no botão de modo, mantém datas (o componente DateRangeFilter ajusta as datas depois se necessário)
-      // Aqui só salvamos o modo preferido
-      const newState = { ...overviewFilter, mode }
+  const updateOverview = (start: string, end: string, mode?: 'month'|'range') => {
+      // Se mode for passado (clique no botão), usa ele. 
+      // Se não (mudança de data), mantém o modo atual.
+      const effectiveMode = mode ? mode : overviewFilter.mode
+      const newState = { start, end, mode: effectiveMode }
       setOverviewFilter(newState)
       localStorage.setItem('bi_filter_overview', JSON.stringify(newState))
   }
 
-  // Atualiza FINANCEIRO (Sempre mensal)
-  const setFinancialDate = (start: string, end: string) => {
-      const newState: FilterState = { start, end, mode: 'month' }
+  const updateFinancial = (start: string, end: string, mode?: 'month'|'range') => {
+      const newState = { start, end, mode: 'month' as const }
       setFinancialFilter(newState)
       localStorage.setItem('bi_filter_financial', JSON.stringify(newState))
   }
 
-  // Atualiza VENDEDORES (Correção do Bug das Metas)
-  const setSellersDate = (start: string, end: string) => {
-      // Se o usuário mudou as datas, assumimos Período Livre ('range'), o que ESCONDE as metas
-      const newState: FilterState = { start, end, mode: 'range' }
-      setSellersFilter(newState)
-      localStorage.setItem('bi_filter_sellers', JSON.stringify(newState))
-  }
-  const setSellersMode = (mode: 'month'|'range') => {
-      // Se o usuário clicou no botão "Por Mês", forçamos o modo 'month'
-      // Isso vai exibir as metas novamente
-      const newState = { ...sellersFilter, mode }
+  const updateSellers = (start: string, end: string, mode?: 'month'|'range') => {
+      // CORREÇÃO CRUCIAL AQUI:
+      // Antes: const effectiveMode = mode ? mode : 'range' (Isso forçava range ao mudar mês)
+      // Agora: Mantém o modo atual se apenas a data mudar.
+      const effectiveMode = mode ? mode : sellersFilter.mode
+      
+      const newState = { start, end, mode: effectiveMode }
       setSellersFilter(newState)
       localStorage.setItem('bi_filter_sellers', JSON.stringify(newState))
   }
@@ -147,15 +132,12 @@ export default function Home() {
       window.location.href = '/login'
   }
 
-  // --- FILTRAGEM SEGURA ---
+  // --- FILTRAGEM ---
   const filterData = (data: any[], filter: FilterState) => {
-      // Proteção contra datas vazias
       if (!data || data.length === 0 || !filter.start || !filter.end) return []
-      
       const start = new Date(filter.start)
       const end = new Date(filter.end)
-      end.setHours(23, 59, 59, 999) // Garante o final do dia
-      
+      end.setHours(23, 59, 59, 999)
       return data.filter(item => {
           const itemDate = new Date(item.sale_date)
           return itemDate >= start && itemDate <= end
@@ -181,7 +163,6 @@ export default function Home() {
 
   if (isLoading) return (<div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-400"><Loader2 className="w-10 h-10 animate-spin mb-4 text-cyan-600" /><p>Carregando sistema seguro...</p></div>)
 
-  // Só mostra conteúdo quando dados E filtros estiverem prontos
   const showContent = dataLoaded && filtersReady
 
   return (
@@ -214,8 +195,8 @@ export default function Home() {
         <div className={activeTab === 'overview' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={overviewFilter.start} endDate={overviewFilter.end} 
-                onDateChange={setOverviewDate} 
-                onFilterModeChange={setOverviewMode} 
+                onDateChange={(s, e) => updateOverview(s, e)} 
+                onFilterModeChange={(m) => updateOverview(overviewFilter.start, overviewFilter.end, m)} 
             />
             <DashboardOverview data={dataOverview} />
             <MaterialRanking data={dataOverview} />
@@ -226,8 +207,8 @@ export default function Home() {
         <div className={activeTab === 'financial' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={financialFilter.start} endDate={financialFilter.end} 
-                onDateChange={setFinancialDate} 
-                onFilterModeChange={() => {}} // Simulador é travado em mensal, ignora modo
+                onDateChange={(s, e) => updateFinancial(s, e)} 
+                onFilterModeChange={(m) => updateFinancial(financialFilter.start, financialFilter.end, m)} 
                 onlyMonthMode={true} 
             />
             <FinancialSimulator 
@@ -247,13 +228,9 @@ export default function Home() {
         <div className={activeTab === 'sellers' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={sellersFilter.start} endDate={sellersFilter.end} 
-                // CORREÇÃO CRUCIAL:
-                // Se mudar data -> vira 'range' (esconde metas)
-                // Se clicar botão modo -> assume o modo clicado
-                onDateChange={setSellersDate} 
-                onFilterModeChange={setSellersMode} 
+                onDateChange={(s, e) => updateSellers(s, e)} 
+                onFilterModeChange={(m) => updateSellers(sellersFilter.start, sellersFilter.end, m)} 
             />
-            {/* O showGoals agora obedece estritamente ao modo */}
             <SellerAnalysis data={dataSellers} showGoals={sellersFilter.mode === 'month'} />
         </div>
 
