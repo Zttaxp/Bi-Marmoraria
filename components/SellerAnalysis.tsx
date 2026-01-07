@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo, useEffect } from 'react'
-import { Users, Briefcase, Crown, Search, X, Layers, AlertCircle, Filter, Target, Loader2, Package } from 'lucide-react'
+import { Users, Briefcase, Crown, Layers, AlertCircle, Filter, Target, X } from 'lucide-react'
 import { createClient } from '../app/utils/supabase/client'
 
 export default function SellerAnalysis({ data, showGoals }: { data: any[], showGoals: boolean }) {
@@ -85,7 +85,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
           clientsMap[client] = { 
             name: client, revenue: 0, cost: 0, freight: 0, 
             revenueHigh: 0, costHigh: 0, freightHigh: 0,
-            revenueLow: 0, costLow: 0, freightLow: 0, // Adicionado Low
+            revenueLow: 0, costLow: 0, freightLow: 0,
             count: 0, items: []
           }
         }
@@ -100,7 +100,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
             clientsMap[client].costHigh += cost
             clientsMap[client].freightHigh += freight
         } else {
-            // Lógica Combate
             clientsMap[client].revenueLow += rev
             clientsMap[client].costLow += cost
             clientsMap[client].freightLow += freight
@@ -127,30 +126,30 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
         })
         .sort((a: any, b: any) => b.revenue - a.revenue)
 
-      // Ranking Clientes GERAL (Sem limite Top 10)
+      // Ranking Clientes GERAL
       const rClientsTotal = Object.values(clientsMap)
         .map((c: any) => ({ ...c, margin: calcMargin(c.revenue, c.cost, c.freight), filterType: 'ALL' }))
         .sort((a: any, b: any) => b.revenue - a.revenue)
 
-      // Ranking Clientes ALTO VALOR (Sem limite Top 10)
+      // Ranking Clientes ALTO VALOR
       const rClientsHigh = Object.values(clientsMap)
         .filter((c: any) => c.revenueHigh > 0)
         .map((c: any) => ({ 
             ...c, 
             revenue: c.revenueHigh, 
             margin: calcMargin(c.revenueHigh, c.costHigh, c.freightHigh),
-            filterType: 'HIGH' // Tag para o modal saber filtrar
+            filterType: 'HIGH'
         }))
         .sort((a: any, b: any) => b.revenue - a.revenue)
 
-      // Ranking Clientes COMBATE (Novo)
+      // Ranking Clientes COMBATE
       const rClientsLow = Object.values(clientsMap)
         .filter((c: any) => c.revenueLow > 0)
         .map((c: any) => ({ 
             ...c, 
             revenue: c.revenueLow, 
             margin: calcMargin(c.revenueLow, c.costLow, c.freightLow),
-            filterType: 'LOW' // Tag para o modal saber filtrar
+            filterType: 'LOW'
         }))
         .sort((a: any, b: any) => b.revenue - a.revenue)
 
@@ -174,10 +173,9 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
       
       const groupedMaterials: Record<string, any> = {}
       selectedItem.items.forEach((sale: any) => {
-          // Filtra os itens do modal baseado na tabela que foi clicada
           if (modalType === 'CLIENT') {
-              if (selectedItem.filterType === 'HIGH' && !sale.isHigh) return; // Se clicou na tabela Alta, ignora baixa
-              if (selectedItem.filterType === 'LOW' && sale.isHigh) return;   // Se clicou na tabela Baixa, ignora alta
+              if (selectedItem.filterType === 'HIGH' && !sale.isHigh) return; 
+              if (selectedItem.filterType === 'LOW' && sale.isHigh) return;   
           }
 
           const key = `${sale.material}|${sale.isHigh ? 'H' : 'L'}`
@@ -210,7 +208,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
              </select>
          </div>
          
-         {/* BOTÃO SÓ APARECE SE showGoals FOR TRUE (Modo Mês) */}
+         {/* BOTÃO AGORA É CONDICIONAL: Só aparece se estiver no modo Mês (showGoals = true) */}
          {showGoals && (
              <button onClick={() => setIsGoalsModalOpen(true)} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-3 rounded-xl font-bold text-sm hover:bg-slate-700 transition shadow-sm w-full md:w-auto justify-center">
                  <Target size={18} /> Definir Metas
@@ -227,7 +225,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
                     <tr>
                         <th className="p-4 w-10">#</th>
                         <th className="p-4 min-w-[150px]">Vendedor</th>
-                        {/* COLUNA META SÓ APARECE SE showGoals FOR TRUE */}
+                        {/* COLUNA CONDICIONAL */}
                         {showGoals && <th className="p-4 min-w-[200px]">Meta Mensal</th>}
                         <th className="p-4 text-center text-purple-600 font-extrabold" title="Chapas de Alto Valor">Qtd. Alta</th>
                         <th className="p-4 text-center text-orange-600 font-extrabold" title="Chapas de Combate">Qtd. Combate</th>
@@ -241,7 +239,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
                             <td className="p-4 text-slate-400 font-bold">{idx + 1}</td>
                             <td className="p-4 font-bold text-slate-700 group-hover:text-cyan-600 underline decoration-dotted decoration-slate-300 underline-offset-4">{seller.name}</td>
                             
-                            {/* DADOS DA META SÓ APARECEM SE showGoals FOR TRUE */}
+                            {/* CÉLULA CONDICIONAL */}
                             {showGoals && (
                                 <td className="p-4">
                                     {seller.goal > 0 ? (
@@ -267,25 +265,21 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
 
       {/* SEÇÃO 2: RANKINGS DE CLIENTES (3 COLUNAS) */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        
         {/* GERAL */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
             <div className="p-4 bg-blue-50 border-b border-blue-100 flex justify-between"><h3 className="font-bold text-blue-800 flex items-center gap-2"><Users size={18} /> Clientes (Geral)</h3></div>
             <ClientTable items={rankingClientsTotal} color="blue" onClick={(item) => { setSelectedItem(item); setModalType('CLIENT'); }} />
         </div>
-
         {/* ALTO VALOR */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
             <div className="p-4 bg-purple-50 border-b border-purple-100"><h3 className="font-bold text-purple-800 flex items-center gap-2"><Crown size={18} /> Clientes (Alto Valor)</h3></div>
             <ClientTable items={rankingClientsHigh} color="purple" onClick={(item) => { setSelectedItem(item); setModalType('CLIENT'); }} />
         </div>
-
-        {/* COMBATE (NOVO) */}
+        {/* COMBATE */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
             <div className="p-4 bg-orange-50 border-b border-orange-100"><h3 className="font-bold text-orange-800 flex items-center gap-2"><Layers size={18} /> Clientes (Combate)</h3></div>
             <ClientTable items={rankingClientsLow} color="orange" onClick={(item) => { setSelectedItem(item); setModalType('CLIENT'); }} />
         </div>
-
       </div>
 
       {/* MODAL METAS */}
