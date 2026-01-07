@@ -116,20 +116,20 @@ export default function Home() {
       localStorage.setItem('bi_active_tab', tab)
   }
 
-  // --- LOGOUT ROBUSTO (CORREÇÃO AQUI) ---
+  // --- LOGOUT COM HARD REDIRECT (CORREÇÃO FINAL) ---
   const handleLogout = async () => { 
+      // 1. Limpa memória local imediatamente
+      localStorage.clear()
+      
       try {
-          // 1. Limpa memória do navegador primeiro (mais importante)
-          localStorage.clear()
-          
-          // 2. Tenta desconectar do Supabase
+          // 2. Tenta avisar o servidor
           await supabase.auth.signOut()
-      } catch (error) {
-          console.error("Erro ao tentar sair:", error)
+      } catch (e) {
+          console.error("Erro ao desconectar:", e)
       } finally {
-          // 3. Força o redirecionamento em qualquer caso (sucesso ou erro)
-          router.replace('/login') 
-          router.refresh()
+          // 3. HARD RELOAD: Força o navegador a ir para a página de login
+          // Isso ignora o roteamento do React e garante que a página seja limpa
+          window.location.href = '/login'
       }
   }
 
@@ -187,7 +187,7 @@ export default function Home() {
                 </div>
                 <div className="flex items-center gap-1 border-l border-slate-200 pl-4 ml-2">
                     <ClearDataButton />
-                    {/* Botão de Sair com a função corrigida */}
+                    {/* Botão de Sair */}
                     <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Sair"><LogOut size={20} /></button>
                 </div>
              </div>
