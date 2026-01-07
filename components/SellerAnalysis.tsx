@@ -7,7 +7,6 @@ import { createClient } from '../app/utils/supabase/client'
 export default function SellerAnalysis({ data, showGoals }: { data: any[], showGoals: boolean }) {
   const supabase = createClient()
   
-  // --- HOOKS ---
   const [selectedItem, setSelectedItem] = useState<any>(null)
   const [modalType, setModalType] = useState<'SELLER' | 'CLIENT' | null>(null)
   const [selectedSellerFilter, setSelectedSellerFilter] = useState<string>('')
@@ -15,7 +14,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
   const [isGoalsModalOpen, setIsGoalsModalOpen] = useState(false)
   const [goals, setGoals] = useState<Record<string, number>>({})
 
-  // 1. BUSCAR METAS DO BANCO
   useEffect(() => {
     const fetchGoals = async () => {
         const { data: goalsData } = await supabase.from('seller_goals').select('seller_name, goal_value')
@@ -30,21 +28,18 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
     fetchGoals()
   }, [])
 
-  // 2. EXTRAIR LISTA DE VENDEDORES
   const sellersList = useMemo(() => {
       const safeData = data || []
       const sellers = new Set(safeData.map(item => item.seller_name || 'INDEFINIDO'))
       return Array.from(sellers).sort()
   }, [data])
 
-  // 3. FILTRAGEM GLOBAL
   const filteredData = useMemo(() => {
       const safeData = data || []
       if (!selectedSellerFilter) return safeData
       return safeData.filter(item => (item.seller_name || 'INDEFINIDO') === selectedSellerFilter)
   }, [data, selectedSellerFilter])
 
-  // 4. PROCESSAMENTO DOS DADOS (Rankings)
   const { rankingSellers, rankingClientsTotal, rankingClientsHigh, rankingClientsLow } = useMemo(() => {
       const sellersMap: Record<string, any> = {}
       const clientsMap: Record<string, any> = {}
@@ -65,7 +60,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
             isHigh
         }
 
-        // Agrupa Vendedores
         if (!sellersMap[seller]) {
           sellersMap[seller] = { 
             name: seller, revenue: 0, cost: 0, freight: 0, 
@@ -80,7 +74,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
         else sellersMap[seller].countLow += 1
         sellersMap[seller].items.push(saleDetail)
 
-        // Agrupa Clientes
         if (!clientsMap[client]) {
           clientsMap[client] = { 
             name: client, revenue: 0, cost: 0, freight: 0, 
@@ -112,7 +105,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
         return (profit / cost) * 100
       }
 
-      // Ranking Vendedores
       const rSellers = Object.values(sellersMap)
         .map((s: any) => {
             const goal = goals[s.name] || 0
@@ -126,12 +118,10 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
         })
         .sort((a: any, b: any) => b.revenue - a.revenue)
 
-      // Ranking Clientes GERAL
       const rClientsTotal = Object.values(clientsMap)
         .map((c: any) => ({ ...c, margin: calcMargin(c.revenue, c.cost, c.freight), filterType: 'ALL' }))
         .sort((a: any, b: any) => b.revenue - a.revenue)
 
-      // Ranking Clientes ALTO VALOR
       const rClientsHigh = Object.values(clientsMap)
         .filter((c: any) => c.revenueHigh > 0)
         .map((c: any) => ({ 
@@ -142,7 +132,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
         }))
         .sort((a: any, b: any) => b.revenue - a.revenue)
 
-      // Ranking Clientes COMBATE
       const rClientsLow = Object.values(clientsMap)
         .filter((c: any) => c.revenueLow > 0)
         .map((c: any) => ({ 
@@ -157,7 +146,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
 
   }, [filteredData, goals, showGoals]) 
 
-  // --- FUNÇÕES AUXILIARES ---
   const handleSaveGoal = async (sellerName: string, value: string) => {
       const numValue = parseFloat(value) || 0
       const { data: { user } } = await supabase.auth.getUser()
@@ -198,7 +186,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
   return (
     <div className="space-y-6">
       
-      {/* FILTROS E METAS */}
       <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
          <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 flex-1 w-full md:w-auto">
              <div className="flex items-center gap-2 text-slate-700"><Filter className="text-cyan-600" size={20} /><span className="font-bold text-sm hidden md:inline">Vendedor:</span></div>
@@ -208,7 +195,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
              </select>
          </div>
          
-         {/* BOTÃO SÓ APARECE SE showGoals FOR TRUE (Modo Mês) */}
+         {/* BOTÃO CONDICIONAL */}
          {showGoals && (
              <button onClick={() => setIsGoalsModalOpen(true)} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-3 rounded-xl font-bold text-sm hover:bg-slate-700 transition shadow-sm w-full md:w-auto justify-center">
                  <Target size={18} /> Definir Metas
@@ -216,7 +203,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
          )}
       </div>
 
-      {/* RANKING VENDEDORES */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2"><Briefcase className="text-slate-600" size={20} /><h3 className="font-bold text-slate-700">Performance & Metas</h3></div>
         <div className="overflow-x-auto">
@@ -225,7 +211,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
                     <tr>
                         <th className="p-4 w-10">#</th>
                         <th className="p-4 min-w-[150px]">Vendedor</th>
-                        {/* COLUNA META SÓ APARECE SE showGoals FOR TRUE */}
+                        {/* HEADER CONDICIONAL */}
                         {showGoals && <th className="p-4 min-w-[200px]">Meta Mensal</th>}
                         <th className="p-4 text-center text-purple-600 font-extrabold" title="Chapas de Alto Valor">Qtd. Alta</th>
                         <th className="p-4 text-center text-orange-600 font-extrabold" title="Chapas de Combate">Qtd. Combate</th>
@@ -239,7 +225,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
                             <td className="p-4 text-slate-400 font-bold">{idx + 1}</td>
                             <td className="p-4 font-bold text-slate-700 group-hover:text-cyan-600 underline decoration-dotted decoration-slate-300 underline-offset-4">{seller.name}</td>
                             
-                            {/* DADOS DA META SÓ APARECEM SE showGoals FOR TRUE */}
+                            {/* CÉLULA CONDICIONAL */}
                             {showGoals && (
                                 <td className="p-4">
                                     {seller.goal > 0 ? (
@@ -263,26 +249,21 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
         </div>
     </div>
 
-      {/* SEÇÃO 2: RANKINGS DE CLIENTES (3 COLUNAS) */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        {/* GERAL */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
             <div className="p-4 bg-blue-50 border-b border-blue-100 flex justify-between"><h3 className="font-bold text-blue-800 flex items-center gap-2"><Users size={18} /> Clientes (Geral)</h3></div>
             <ClientTable items={rankingClientsTotal} color="blue" onClick={(item) => { setSelectedItem(item); setModalType('CLIENT'); }} />
         </div>
-        {/* ALTO VALOR */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
             <div className="p-4 bg-purple-50 border-b border-purple-100"><h3 className="font-bold text-purple-800 flex items-center gap-2"><Crown size={18} /> Clientes (Alto Valor)</h3></div>
             <ClientTable items={rankingClientsHigh} color="purple" onClick={(item) => { setSelectedItem(item); setModalType('CLIENT'); }} />
         </div>
-        {/* COMBATE */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
             <div className="p-4 bg-orange-50 border-b border-orange-100"><h3 className="font-bold text-orange-800 flex items-center gap-2"><Layers size={18} /> Clientes (Combate)</h3></div>
             <ClientTable items={rankingClientsLow} color="orange" onClick={(item) => { setSelectedItem(item); setModalType('CLIENT'); }} />
         </div>
       </div>
 
-      {/* MODAL METAS */}
       {isGoalsModalOpen && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
             <div className="bg-white w-full max-w-md rounded-xl shadow-2xl flex flex-col animate-in zoom-in-95 max-h-[80vh]">
@@ -304,7 +285,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
         </div>
       )}
 
-      {/* MODAL DETALHES */}
       {selectedItem && modalData && !isGoalsModalOpen && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
             <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-xl shadow-2xl flex flex-col animate-in zoom-in-95">
@@ -338,7 +318,6 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
   )
 }
 
-// -- SUB-COMPONENTES --
 function BadgeMargin({ value }: { value: number }) {
     let colorClass = "bg-green-100 text-green-700"
     if (value < 20) colorClass = "bg-red-100 text-red-700"

@@ -36,7 +36,6 @@ export default function Home() {
   // 1. Auth & Data Fetch & Persistência
   useEffect(() => {
     const init = async () => {
-      // Recuperar aba e filtros salvos
       const savedTab = localStorage.getItem('bi_active_tab')
       const savedFilter = localStorage.getItem('bi_filters')
       
@@ -44,7 +43,9 @@ export default function Home() {
       
       let initialStart = ''
       let initialEnd = ''
-      let initialMode: any = 'month'
+      
+      // Default: mês
+      let initialMode: 'month' | 'range' = 'month'
 
       if (savedFilter) {
           const parsed = JSON.parse(savedFilter)
@@ -87,11 +88,17 @@ export default function Home() {
     init()
   }, [])
 
-  const handleFilterChange = (start: string, end: string, mode: 'month'|'range') => {
+  // Função Centralizada para mudar filtros e salvar na memória
+  const handleFilterChange = (start: string, end: string, mode?: 'month'|'range') => {
       setStartDate(start)
       setEndDate(end)
-      if(mode) setFilterMode(mode)
-      localStorage.setItem('bi_filters', JSON.stringify({ start, end, mode: mode || filterMode }))
+      
+      // Se um modo for passado explicitamente, usa ele.
+      // Se não, mantém o atual.
+      const newMode = mode || filterMode 
+      setFilterMode(newMode)
+      
+      localStorage.setItem('bi_filters', JSON.stringify({ start, end, mode: newMode }))
   }
 
   const changeTab = (tab: any) => {
@@ -169,15 +176,12 @@ export default function Home() {
             <div className="text-center mt-20 text-slate-400"><Upload className="w-12 h-12 mx-auto mb-4 opacity-20" /><p>Nenhum dado encontrado. Faça upload da planilha acima.</p></div>
         )}
 
-        {/* SOLUÇÃO: Usamos 'hidden' em vez de renderização condicional.
-            Isso mantém os componentes "vivos" (montados) com seu estado preservado.
-        */}
-
         {/* ABA GERAL */}
         <div className={activeTab === 'overview' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={startDate} endDate={endDate} 
-                onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                // CORREÇÃO: Força 'range' ao mudar data manualmente
+                onDateChange={(s, e) => handleFilterChange(s, e, 'range')} 
                 onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
             />
             <DashboardOverview data={filteredData} />
@@ -189,7 +193,8 @@ export default function Home() {
         <div className={activeTab === 'financial' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={startDate} endDate={endDate} 
-                onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                // Aqui mantemos 'month' se possível, mas o componente DateRangeFilter com onlyMonthMode cuida disso
+                onDateChange={(s, e) => handleFilterChange(s, e)} 
                 onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
                 onlyMonthMode={true} 
             />
@@ -210,9 +215,11 @@ export default function Home() {
         <div className={activeTab === 'sellers' && dataLoaded ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={startDate} endDate={endDate} 
-                onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                // CORREÇÃO CRUCIAL: Se o usuário mudar a data, força o modo 'range'
+                onDateChange={(s, e) => handleFilterChange(s, e, 'range')} 
                 onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
             />
+            {/* O showGoals agora será falso se a pessoa mudar as datas */}
             <SellerAnalysis data={filteredData} showGoals={filterMode === 'month'} />
         </div>
 
