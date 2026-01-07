@@ -7,6 +7,7 @@ import {
   LayoutDashboard, Calculator, CalendarDays, Users, Upload, CheckCircle, Loader2, LogOut 
 } from 'lucide-react'
 
+// Imports dos Componentes
 import FileUpload from '@/components/FileUpload'
 import DashboardOverview from '@/components/DashboardOverview'
 import RevenueChart from '@/components/RevenueChart'
@@ -62,17 +63,15 @@ export default function Home() {
       if (allRows.length > 0) {
         allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
         
-        // Definir Datas Padrão (Baseado nos dados reais)
+        // Datas padrão
         const defaultStart = new Date(allRows[0].sale_date).toISOString().split('T')[0]
         const defaultEnd = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
         const defaultState: FilterState = { start: defaultStart, end: defaultEnd, mode: 'month' }
 
-        // Helper para carregar ou usar padrão
         const getInitialFilter = (key: string): FilterState => {
             const saved = localStorage.getItem(key)
             if (saved) {
                 const parsed = JSON.parse(saved)
-                // Validação básica se as datas existem
                 if (parsed.start && parsed.end) return parsed
             }
             return defaultState
@@ -84,31 +83,28 @@ export default function Home() {
 
         setAllSalesData(allRows)
         setDataLoaded(true)
-        setFiltersReady(true) // Libera a renderização das abas
+        setFiltersReady(true)
       }
       setIsLoading(false)
     }
     init()
   }, [])
 
-  // --- ATUALIZADORES DE FILTRO (Independentes) ---
-  
+  // --- FUNÇÕES DE ATUALIZAÇÃO DE FILTRO ---
   const updateOverview = (start: string, end: string, mode?: 'month'|'range') => {
-      const effectiveMode = mode ? mode : 'range' // Se mudar data manual, vira range
+      const effectiveMode = mode ? mode : 'range'
       const newState = { start, end, mode: effectiveMode }
       setOverviewFilter(newState)
       localStorage.setItem('bi_filter_overview', JSON.stringify(newState))
   }
 
   const updateFinancial = (start: string, end: string, mode?: 'month'|'range') => {
-      const newState = { start, end, mode: 'month' as const } // Sempre mês
+      const newState = { start, end, mode: 'month' as const }
       setFinancialFilter(newState)
       localStorage.setItem('bi_filter_financial', JSON.stringify(newState))
   }
 
   const updateSellers = (start: string, end: string, mode?: 'month'|'range') => {
-      // Se mode vier undefined (mudança manual de data), força 'range'
-      // Se mode vier definido (clique nos botões), usa o mode
       const effectiveMode = mode ? mode : 'range'
       const newState = { start, end, mode: effectiveMode }
       setSellersFilter(newState)
@@ -120,13 +116,24 @@ export default function Home() {
       localStorage.setItem('bi_active_tab', tab)
   }
 
+  // --- LOGOUT ROBUSTO (CORREÇÃO AQUI) ---
   const handleLogout = async () => { 
-      localStorage.clear() // Limpa tudo ao sair
-      await supabase.auth.signOut()
-      router.push('/login') 
+      try {
+          // 1. Limpa memória do navegador primeiro (mais importante)
+          localStorage.clear()
+          
+          // 2. Tenta desconectar do Supabase
+          await supabase.auth.signOut()
+      } catch (error) {
+          console.error("Erro ao tentar sair:", error)
+      } finally {
+          // 3. Força o redirecionamento em qualquer caso (sucesso ou erro)
+          router.replace('/login') 
+          router.refresh()
+      }
   }
 
-  // --- FILTRAGEM (Memorizada) ---
+  // --- FILTRAGEM ---
   const filterData = (data: any[], filter: FilterState) => {
       if (!filter.start || !filter.end) return data
       const start = new Date(filter.start)
@@ -157,7 +164,6 @@ export default function Home() {
 
   if (isLoading) return (<div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-400"><Loader2 className="w-10 h-10 animate-spin mb-4 text-cyan-600" /><p>Carregando sistema seguro...</p></div>)
 
-  // Só renderiza o conteúdo principal quando filtros estiverem prontos
   const showContent = dataLoaded && filtersReady
 
   return (
@@ -181,6 +187,7 @@ export default function Home() {
                 </div>
                 <div className="flex items-center gap-1 border-l border-slate-200 pl-4 ml-2">
                     <ClearDataButton />
+                    {/* Botão de Sair com a função corrigida */}
                     <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Sair"><LogOut size={20} /></button>
                 </div>
              </div>
@@ -233,7 +240,6 @@ export default function Home() {
                 onDateChange={(s, e) => updateSellers(s, e)} 
                 onFilterModeChange={(m) => updateSellers(sellersFilter.start, sellersFilter.end, m)} 
             />
-            {/* CORREÇÃO: Metas só aparecem se o modo for ESTRITAMENTE 'month' */}
             <SellerAnalysis data={dataSellers} showGoals={sellersFilter.mode === 'month'} />
         </div>
 
