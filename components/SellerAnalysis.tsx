@@ -195,7 +195,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
              </select>
          </div>
          
-         {/* BOTÃO CONDICIONAL */}
+         {/* BOTÃO SÓ APARECE SE showGoals FOR TRUE */}
          {showGoals && (
              <button onClick={() => setIsGoalsModalOpen(true)} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-3 rounded-xl font-bold text-sm hover:bg-slate-700 transition shadow-sm w-full md:w-auto justify-center">
                  <Target size={18} /> Definir Metas
@@ -211,7 +211,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
                     <tr>
                         <th className="p-4 w-10">#</th>
                         <th className="p-4 min-w-[150px]">Vendedor</th>
-                        {/* HEADER CONDICIONAL */}
+                        {/* COLUNA META SÓ APARECE SE showGoals FOR TRUE */}
                         {showGoals && <th className="p-4 min-w-[200px]">Meta Mensal</th>}
                         <th className="p-4 text-center text-purple-600 font-extrabold" title="Chapas de Alto Valor">Qtd. Alta</th>
                         <th className="p-4 text-center text-orange-600 font-extrabold" title="Chapas de Combate">Qtd. Combate</th>
@@ -225,7 +225,7 @@ export default function SellerAnalysis({ data, showGoals }: { data: any[], showG
                             <td className="p-4 text-slate-400 font-bold">{idx + 1}</td>
                             <td className="p-4 font-bold text-slate-700 group-hover:text-cyan-600 underline decoration-dotted decoration-slate-300 underline-offset-4">{seller.name}</td>
                             
-                            {/* CÉLULA CONDICIONAL */}
+                            {/* CÉLULA META SÓ APARECE SE showGoals FOR TRUE */}
                             {showGoals && (
                                 <td className="p-4">
                                     {seller.goal > 0 ? (
