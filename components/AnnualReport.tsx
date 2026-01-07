@@ -20,21 +20,18 @@ export default function AnnualReport({ data }: { data: any[] }) {
   const [globalConfig, setGlobalConfig] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
-  // 1. Extrair anos disponíveis
   const availableYears = useMemo(() => {
       const years = new Set(data.map(d => new Date(d.sale_date).getFullYear()))
       if (years.size === 0) years.add(new Date().getFullYear())
       return Array.from(years).sort((a, b) => b - a)
   }, [data])
 
-  // CORREÇÃO: Forçar atualização do ano se o atual não estiver na lista de dados
   useEffect(() => {
       if (availableYears.length > 0 && !availableYears.includes(selectedYear)) {
           setSelectedYear(availableYears[0])
       }
   }, [availableYears, selectedYear])
 
-  // 2. Carregar dados financeiros
   useEffect(() => {
       const fetchFinancials = async () => {
           setLoading(true)
@@ -56,7 +53,6 @@ export default function AnnualReport({ data }: { data: any[] }) {
       fetchFinancials()
   }, [])
 
-  // 3. Processar DRE Detalhado
   const monthlyDRE = useMemo(() => {
       const months = Array.from({ length: 12 }, (_, i) => i + 1)
       
@@ -80,6 +76,11 @@ export default function AnnualReport({ data }: { data: any[] }) {
 
           let revenue, costChapa, costFreight, taxRate, defRate, commRate, otherVar, fixedCost
 
+          // Helper para fixo: se DB tiver valor (mesmo que 0 se foi intencional, mas assumindo NULL como padrão), use. Senão 85k.
+          // Como DB retorna null se não existe, e 0 se for 0.
+          // Lógica: Se existe registro no DB para o mês, usa o valor de lá. Se não, 85k.
+          const dbFixed = dbRow.fixed_cost !== undefined && dbRow.fixed_cost !== null ? Number(dbRow.fixed_cost) : 85000
+          
           if (viewMode === 'REAL') {
               revenue = csvRevenueGross
               costChapa = csvCostChapa
@@ -88,7 +89,7 @@ export default function AnnualReport({ data }: { data: any[] }) {
               defRate = dbRow.default_rate !== undefined ? Number(dbRow.default_rate) : defDef
               commRate = dbRow.commission_rate !== undefined ? Number(dbRow.commission_rate) : defComm
               otherVar = Number(dbRow.variable_cost) || 0
-              fixedCost = Number(dbRow.fixed_cost) || 0
+              fixedCost = dbFixed
           } else {
               revenue = dbRow.sim_revenue !== undefined ? Number(dbRow.sim_revenue) : csvRevenueGross
               costChapa = dbRow.sim_cost_chapa !== undefined ? Number(dbRow.sim_cost_chapa) : csvCostChapa
@@ -97,7 +98,9 @@ export default function AnnualReport({ data }: { data: any[] }) {
               defRate = dbRow.sim_default_rate !== undefined ? Number(dbRow.sim_default_rate) : (dbRow.default_rate !== undefined ? Number(dbRow.default_rate) : defDef)
               commRate = dbRow.sim_commission_rate !== undefined ? Number(dbRow.sim_commission_rate) : (dbRow.commission_rate !== undefined ? Number(dbRow.commission_rate) : defComm)
               otherVar = dbRow.sim_variable_cost !== undefined ? Number(dbRow.sim_variable_cost) : (Number(dbRow.variable_cost) || 0)
-              fixedCost = dbRow.sim_fixed_cost !== undefined ? Number(dbRow.sim_fixed_cost) : (Number(dbRow.fixed_cost) || 0)
+              
+              const simFixDB = dbRow.sim_fixed_cost !== undefined && dbRow.sim_fixed_cost !== null ? Number(dbRow.sim_fixed_cost) : null
+              fixedCost = simFixDB !== null ? simFixDB : dbFixed
           }
 
           const valTax = revenue * (taxRate / 100)
@@ -115,7 +118,6 @@ export default function AnnualReport({ data }: { data: any[] }) {
       })
   }, [data, financialData, selectedYear, viewMode, globalConfig])
 
-  // Totais e Exportação (Mantidos iguais)
   const yearTotals = useMemo(() => {
       const t = { revenue: 0, valTax: 0, valDef: 0, netRevenue: 0, costChapa: 0, costFreight: 0, valComm: 0, otherVar: 0, contribMargin: 0, fixedCost: 0, netProfit: 0 }
       monthlyDRE.forEach(m => {
@@ -128,7 +130,7 @@ export default function AnnualReport({ data }: { data: any[] }) {
   
   const handleExport = () => {
       const ws = XLSX.utils.json_to_sheet(monthlyDRE.map(m => ({
-          Mês: m.monthName, 'Faturamento': m.revenue, 'Impostos': m.valTax, 'Lucro': m.netProfit
+          Mês: m.monthName, 'Faturamento': m.revenue, 'Impostos': m.valTax, 'Comissões': m.valComm, 'Fixos': m.fixedCost, 'Lucro': m.netProfit
       })))
       const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "DRE Anual"); XLSX.writeFile(wb, `DRE_${selectedYear}.xlsx`)
   }
@@ -156,10 +158,7 @@ export default function AnnualReport({ data }: { data: any[] }) {
              </select>
          </div>
          <div className="flex gap-4 items-center">
-             <div className="text-right">
-                 <span className="text-xs font-bold text-slate-400 uppercase">Lucro Anual</span>
-                 <div className={`text-xl font-bold ${yearTotals.netProfit >= 0 ? 'text-slate-800' : 'text-red-500'}`}>{fmt(yearTotals.netProfit)}</div>
-             </div>
+             <div className="text-right"><span className="text-xs font-bold text-slate-400 uppercase">Lucro Anual</span><div className={`text-xl font-bold ${yearTotals.netProfit >= 0 ? 'text-slate-800' : 'text-red-500'}`}>{fmt(yearTotals.netProfit)}</div></div>
              <button onClick={handleExport} className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"><Download size={20} /></button>
          </div>
       </div>

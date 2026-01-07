@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Calculator, RefreshCcw, TrendingUp, TrendingDown, Settings, Save, Loader2, AlertCircle } from 'lucide-react'
 import { createClient } from '../app/utils/supabase/client'
 
@@ -34,9 +34,11 @@ export default function FinancialSimulator({
   const [globalDefault, setGlobalDefault] = useState(1.50)
   const [globalCommission, setGlobalCommission] = useState(0)
   const [isSavingGlobal, setIsSavingGlobal] = useState(false)
+  
+  // Feedback de salvamento do mês
+  const [isSavingMonth, setIsSavingMonth] = useState(false)
 
   // --- DADOS MENSAIS (Custos Fixos/Var R$) ---
-  // ALTERAÇÃO 1: Iniciando com 85.000 de padrão
   const [baseFixedCost, setBaseFixedCost] = useState(85000) 
   const [baseOtherVarCost, setBaseOtherVarCost] = useState(0) 
 
@@ -49,11 +51,10 @@ export default function FinancialSimulator({
   const [simDefaultRate, setSimDefaultRate] = useState(1.50)
   const [simCommissionRate, setSimCommissionRate] = useState(0)
   
-  // ALTERAÇÃO 1: Iniciando com 85.000 de padrão
   const [simFixedCost, setSimFixedCost] = useState(85000)
   const [simOtherVarCost, setSimOtherVarCost] = useState(0)
 
-  // 1. CARREGAR DADOS GLOBAIS E MENSAIS
+  // 1. CARREGAR DADOS (E INICIALIZAR REGISTRO SE NECESSÁRIO)
   useEffect(() => {
     const loadData = async () => {
         if (!monthKey) return
@@ -70,22 +71,28 @@ export default function FinancialSimulator({
             globalConfig = defaults
         }
 
-        setGlobalTax(Number(globalConfig.tax_rate))
-        setGlobalDefault(Number(globalConfig.default_rate))
-        setGlobalCommission(Number(globalConfig.commission_rate))
+        const gTax = Number(globalConfig.tax_rate)
+        const gDef = Number(globalConfig.default_rate)
+        const gComm = Number(globalConfig.commission_rate)
+
+        setGlobalTax(gTax)
+        setGlobalDefault(gDef)
+        setGlobalCommission(gComm)
 
         // B. Carregar Dados do Mês Específico
         const { data: monthData } = await supabase.from('financial_monthly_data').select('*').eq('month_key', monthKey).single()
         
         if (monthData) {
-            // Se existir no banco, usa o valor do banco. Se for null, usa 85000.
+            // Se existir no banco, carrega.
+            // Se fixed_cost for nulo no banco, assume 85k.
             const loadedFix = monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000
+            
             setBaseFixedCost(loadedFix)
             setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
             
-            setSimTaxRate(monthData.sim_tax_rate ?? globalConfig.tax_rate)
-            setSimDefaultRate(monthData.sim_default_rate ?? globalConfig.default_rate)
-            setSimCommissionRate(monthData.sim_commission_rate ?? globalConfig.commission_rate)
+            setSimTaxRate(monthData.sim_tax_rate ?? gTax)
+            setSimDefaultRate(monthData.sim_default_rate ?? gDef)
+            setSimCommissionRate(monthData.sim_commission_rate ?? gComm)
             
             setSimFixedCost(monthData.sim_fixed_cost ?? loadedFix)
             setSimOtherVarCost(monthData.sim_variable_cost ?? (Number(monthData.variable_cost) || 0))
@@ -94,17 +101,41 @@ export default function FinancialSimulator({
             setSimCostChapa(monthData.sim_cost_chapa ?? costChapa)
             setSimCostFreight(monthData.sim_cost_freight ?? costFreight)
         } else {
-            // Mês novo: usa defaults (85k fixo)
-            setBaseFixedCost(85000)
+            // C. MÊS NOVO (Sem registro no banco)
+            // Define os padrões
+            const defaultFix = 85000
+            
+            setBaseFixedCost(defaultFix)
             setBaseOtherVarCost(0)
             
-            setSimTaxRate(Number(globalConfig.tax_rate))
-            setSimDefaultRate(Number(globalConfig.default_rate))
-            setSimCommissionRate(Number(globalConfig.commission_rate))
+            setSimTaxRate(gTax)
+            setSimDefaultRate(gDef)
+            setSimCommissionRate(gComm)
             setSimRevenue(grossRevenue)
             setSimCostChapa(costChapa)
             setSimCostFreight(costFreight)
-            setSimFixedCost(85000)
+            setSimFixedCost(defaultFix)
+
+            // IMPORTANTE: Criar o registro inicial no banco para garantir consistência com a aba Anual
+            // Assim que o mês é carregado, ele já "existe" para o relatório anual
+            await supabase.from('financial_monthly_data').insert({
+                user_id: user.id,
+                month_key: monthKey,
+                tax_rate: gTax,
+                default_rate: gDef,
+                commission_rate: gComm,
+                fixed_cost: defaultFix,
+                variable_cost: 0,
+                // Simulado espelha o real inicialmente
+                sim_revenue: grossRevenue,
+                sim_cost_chapa: costChapa,
+                sim_cost_freight: costFreight,
+                sim_tax_rate: gTax,
+                sim_default_rate: gDef,
+                sim_commission_rate: gComm,
+                sim_fixed_cost: defaultFix,
+                sim_variable_cost: 0
+            })
         }
     }
     loadData()
@@ -123,6 +154,7 @@ export default function FinancialSimulator({
           commission_rate: globalCommission
       })
 
+      // Atualiza também o mês atual para refletir a mudança global (opcional, mas recomendado)
       await supabase.from('financial_monthly_data')
         .update({
             tax_rate: globalTax,
@@ -130,7 +162,9 @@ export default function FinancialSimulator({
             commission_rate: globalCommission
         })
         .eq('user_id', user.id)
+        .eq('month_key', monthKey)
 
+      // Atualiza simulado local
       setSimTaxRate(globalTax)
       setSimDefaultRate(globalDefault)
       setSimCommissionRate(globalCommission)
@@ -138,34 +172,50 @@ export default function FinancialSimulator({
       setIsSavingGlobal(false)
   }
 
-  // 3. SALVAR DADOS DO MÊS
-  const saveMonthData = async (fix: number, otherVar: number, simUpdates: any = {}) => {
+  // 3. FUNÇÃO DE SALVAMENTO ROBUSTA
+  // Usamos useCallback para garantir a referência estável
+  const saveMonthData = useCallback(async (
+      currentFix: number, 
+      currentVar: number, 
+      simUpdates: any = {}
+  ) => {
       if (!monthKey) return
+      setIsSavingMonth(true) // Ativa indicador visual
+
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      if (user) {
+          // Resolvemos os valores simulados: ou o update ou o estado atual
+          // Nota: Como o estado pode não ter atualizado ainda dentro do closure,
+          // passamos os valores críticos via argumento (simUpdates)
+          
+          const payload = {
+              user_id: user.id,
+              month_key: monthKey,
+              // Dados Reais
+              tax_rate: globalTax, 
+              default_rate: globalDefault,
+              commission_rate: globalCommission,
+              fixed_cost: currentFix,
+              variable_cost: currentVar,
+              
+              // Dados Simulados (Se vier no update usa, senão usa o state atual)
+              sim_revenue: simUpdates.revenue !== undefined ? simUpdates.revenue : simRevenue,
+              sim_cost_chapa: simUpdates.chapa !== undefined ? simUpdates.chapa : simCostChapa,
+              sim_cost_freight: simUpdates.freight !== undefined ? simUpdates.freight : simCostFreight,
+              sim_tax_rate: simUpdates.tax !== undefined ? simUpdates.tax : simTaxRate,
+              sim_default_rate: simUpdates.def !== undefined ? simUpdates.def : simDefaultRate,
+              sim_commission_rate: simUpdates.comm !== undefined ? simUpdates.comm : simCommissionRate,
+              sim_fixed_cost: simUpdates.fix !== undefined ? simUpdates.fix : simFixedCost,
+              sim_variable_cost: simUpdates.otherVar !== undefined ? simUpdates.otherVar : simOtherVarCost
+          }
 
-      const payload = {
-          user_id: user.id,
-          month_key: monthKey,
-          tax_rate: globalTax, 
-          default_rate: globalDefault,
-          commission_rate: globalCommission,
-          
-          fixed_cost: fix,
-          variable_cost: otherVar,
-          
-          sim_revenue: simUpdates.revenue ?? simRevenue,
-          sim_cost_chapa: simUpdates.chapa ?? simCostChapa,
-          sim_cost_freight: simUpdates.freight ?? simCostFreight,
-          sim_tax_rate: simUpdates.tax ?? simTaxRate,
-          sim_default_rate: simUpdates.def ?? simDefaultRate,
-          sim_commission_rate: simUpdates.comm ?? simCommissionRate,
-          sim_fixed_cost: simUpdates.fix ?? simFixedCost,
-          sim_variable_cost: simUpdates.otherVar ?? simOtherVarCost
+          await supabase.from('financial_monthly_data').upsert(payload, { onConflict: 'user_id, month_key' })
       }
+      
+      // Pequeno delay para o usuário ver que salvou
+      setTimeout(() => setIsSavingMonth(false), 600)
 
-      await supabase.from('financial_monthly_data').upsert(payload, { onConflict: 'user_id, month_key' })
-  }
+  }, [monthKey, globalTax, globalDefault, globalCommission, simRevenue, simCostChapa, simCostFreight, simTaxRate, simDefaultRate, simCommissionRate, simFixedCost, simOtherVarCost])
 
   // --- CÁLCULOS DRE ---
   const calculateDRE = (
@@ -196,20 +246,23 @@ export default function FinancialSimulator({
 
   const diffProfit = sim.netProfit - real.netProfit
 
-  // Handlers para Valores Absolutos (R$)
+  // --- HANDLERS (Com Salvamento Imediato) ---
+
   const handleSimVal = (val: number, setter: any, type: 'val'|'pct', field: string) => {
       const finalVal = type === 'val' ? val : simRevenue * (val / 100)
       setter(finalVal)
+      
+      // Prepara objeto de update
       const updates: any = {}
       if(field === 'revenue') updates.revenue = finalVal
       if(field === 'chapa') updates.chapa = finalVal
       if(field === 'freight') updates.freight = finalVal
       if(field === 'otherVar') updates.otherVar = finalVal
       if(field === 'fix') updates.fix = finalVal
+      
       saveMonthData(baseFixedCost, baseOtherVarCost, updates)
   }
   
-  // Handler para Porcentagens (%)
   const handleSimPct = (val: number, setter: any, field: string) => {
       setter(val)
       const updates: any = {}
@@ -219,12 +272,9 @@ export default function FinancialSimulator({
       saveMonthData(baseFixedCost, baseOtherVarCost, updates)
   }
 
-  // ALTERAÇÃO 2: Novo Handler para editar R$ em campos que são Taxas
-  // Ele recebe o valor em R$, calcula a % e salva.
   const handleSimValForRate = (val: number, setterPct: any, field: string) => {
       const newPct = simRevenue > 0 ? (val / simRevenue) * 100 : 0
       setterPct(newPct)
-      
       const updates: any = {}
       if(field === 'tax') updates.tax = newPct
       if(field === 'def') updates.def = newPct
@@ -234,13 +284,18 @@ export default function FinancialSimulator({
 
   const handleRealMonthUpdate = (val: number, setter: any, field: 'fix'|'var') => {
       setter(val)
-      saveMonthData(field === 'fix' ? val : baseFixedCost, field === 'var' ? val : baseOtherVarCost)
+      // Atualiza o valor local E salva no banco
+      const newFix = field === 'fix' ? val : baseFixedCost
+      const newVar = field === 'var' ? val : baseOtherVarCost
+      saveMonthData(newFix, newVar)
   }
 
   const resetValues = () => {
       setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight);
       setSimTaxRate(globalTax); setSimDefaultRate(globalDefault); setSimCommissionRate(globalCommission);
+      // Reseta para os valores reais atuais
       setSimFixedCost(baseFixedCost); setSimOtherVarCost(baseOtherVarCost);
+      
       saveMonthData(baseFixedCost, baseOtherVarCost, {
           revenue: grossRevenue, chapa: costChapa, freight: costFreight,
           tax: globalTax, def: globalDefault, comm: globalCommission,
@@ -280,9 +335,17 @@ export default function FinancialSimulator({
 
       {/* HEADER DO MÊS */}
       <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-         <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-             DRE Mês: {monthKey || 'Selecione'}
-         </h2>
+         <div className="flex items-center gap-4">
+             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                 DRE Mês: {monthKey || 'Selecione'}
+             </h2>
+             {/* INDICADOR VISUAL DE SALVAMENTO */}
+             {isSavingMonth && (
+                 <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded flex items-center gap-1 animate-pulse">
+                     <Save size={12} /> Salvando...
+                 </span>
+             )}
+         </div>
          <button onClick={resetValues} className="text-sm font-bold text-slate-500 hover:text-cyan-600 flex items-center gap-2">
             <RefreshCcw size={14} /> Resetar Simulação
          </button>
@@ -305,7 +368,6 @@ export default function FinancialSimulator({
              isHeader
           />
 
-          {/* ALTERAÇÃO 2: Adicionado onSimValChange para Impostos */}
           <DRELine 
              label=" (-) Impostos" 
              realVal={real.valTax} realPct={globalTax} 
@@ -314,7 +376,6 @@ export default function FinancialSimulator({
              onSimValChange={(v: number) => handleSimValForRate(v, setSimTaxRate, 'tax')}
              isPercentEditable isNegative
           />
-          {/* ALTERAÇÃO 2: Adicionado onSimValChange para Inadimplência */}
           <DRELine 
              label=" (-) Inadimplência" 
              realVal={real.valDef} realPct={globalDefault} 
@@ -343,7 +404,6 @@ export default function FinancialSimulator({
              isNegative
           />
           
-          {/* ALTERAÇÃO 2: Adicionado onSimValChange para Comissões */}
           <DRELine 
              label=" (-) Comissões" 
              realVal={real.valComm} realPct={globalCommission} 
@@ -442,14 +502,23 @@ function DRELine({ label, realVal, realPct, simVal, simPct, onRealValChange, onR
     )
 }
 
+// CORREÇÃO: Tipagem do evento no handleKeyDown para aceitar o elemento Input
 function CurrencyInput({ value, onChange, isPercent = false, className = '', readOnly = false, placeholder }: CurrencyInputProps) {
     const [isEditing, setIsEditing] = useState(false)
     const [tempValue, setTempValue] = useState(value)
+    
     useEffect(() => { if (!isEditing) setTempValue(value) }, [value, isEditing])
+    
     const handleBlur = () => { setIsEditing(false); onChange(tempValue) }
     
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => { 
+        if(e.key === 'Enter') { 
+            e.currentTarget.blur() 
+        } 
+    }
+
     if (isEditing && !readOnly) {
-        return <input type="number" step="0.01" autoFocus value={tempValue} onChange={e => setTempValue(parseFloat(e.target.value) || 0)} onBlur={handleBlur} placeholder={placeholder} className={`rounded p-1 focus:ring-2 focus:ring-cyan-500 outline-none border ${className}`} />
+        return <input type="number" step="0.01" autoFocus value={tempValue} onChange={e => setTempValue(parseFloat(e.target.value) || 0)} onBlur={handleBlur} onKeyDown={handleKeyDown} placeholder={placeholder} className={`rounded p-1 focus:ring-2 focus:ring-cyan-500 outline-none border ${className}`} />
     }
     return (
         <div onClick={() => !readOnly && setIsEditing(true)} className={`rounded p-1 truncate transition-colors border ${readOnly ? 'cursor-default' : 'cursor-text hover:border-cyan-300'} ${className}`} title={readOnly ? "Selecione um mês para editar" : "Clique para editar"}>

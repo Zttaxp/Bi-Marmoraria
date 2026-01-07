@@ -7,7 +7,6 @@ import {
   LayoutDashboard, Calculator, CalendarDays, Users, Upload, CheckCircle, Loader2, LogOut 
 } from 'lucide-react'
 
-// Imports dos Componentes
 import FileUpload from '@/components/FileUpload'
 import DashboardOverview from '@/components/DashboardOverview'
 import RevenueChart from '@/components/RevenueChart'
@@ -33,13 +32,25 @@ export default function Home() {
   const [endDate, setEndDate] = useState('')
   const [filterMode, setFilterMode] = useState<'month' | 'range'>('month')
 
-  // 1. Auth & Data Fetch & Persistência de Aba
+  // 1. Auth & Data Fetch & Recuperação de Estado
   useEffect(() => {
     const init = async () => {
-      // A. Recuperar aba salva no navegador
+      // A. Recuperar dados salvos no navegador (Aba, Datas, Modo)
       const savedTab = localStorage.getItem('bi_active_tab')
-      if (savedTab) {
-          setActiveTab(savedTab as any)
+      const savedFilter = localStorage.getItem('bi_filters')
+      
+      if (savedTab) setActiveTab(savedTab as any)
+      
+      let initialStart = ''
+      let initialEnd = ''
+      let initialMode: any = 'month'
+
+      if (savedFilter) {
+          const parsed = JSON.parse(savedFilter)
+          initialStart = parsed.start
+          initialEnd = parsed.end
+          initialMode = parsed.mode
+          setFilterMode(parsed.mode)
       }
 
       const { data: { user } } = await supabase.auth.getUser()
@@ -59,10 +70,15 @@ export default function Home() {
 
       if (allRows.length > 0) {
         allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
-        const start = new Date(allRows[0].sale_date).toISOString().split('T')[0]
-        const end = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
-        setStartDate(start)
-        setEndDate(end)
+        
+        // Se não tiver data salva no storage, usa a do banco
+        if (!initialStart) {
+            initialStart = new Date(allRows[0].sale_date).toISOString().split('T')[0]
+            initialEnd = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
+        }
+
+        setStartDate(initialStart)
+        setEndDate(initialEnd)
         setAllSalesData(allRows)
         setDataLoaded(true)
       }
@@ -71,19 +87,33 @@ export default function Home() {
     init()
   }, [])
 
-  // Função para trocar de aba e salvar no localStorage
-  const changeTab = (tab: 'overview' | 'financial' | 'annual' | 'sellers') => {
+  // Função Centralizada para mudar filtros e salvar na memória
+  const handleFilterChange = (start: string, end: string, mode: 'month'|'range') => {
+      setStartDate(start)
+      setEndDate(end)
+      // Se mode vier undefined (ex: só mudou data), mantém o atual
+      if(mode) setFilterMode(mode)
+      
+      // Salva no navegador
+      localStorage.setItem('bi_filters', JSON.stringify({
+          start, 
+          end, 
+          mode: mode || filterMode
+      }))
+  }
+
+  const changeTab = (tab: any) => {
       setActiveTab(tab)
       localStorage.setItem('bi_active_tab', tab)
   }
 
   const handleLogout = async () => { 
-      localStorage.removeItem('bi_active_tab') // Limpa a aba salva ao sair
+      localStorage.removeItem('bi_active_tab')
+      localStorage.removeItem('bi_filters')
       await supabase.auth.signOut()
       router.push('/login') 
   }
 
-  // Filtro de Data
   const getFilteredData = () => {
       if (!startDate || !endDate) return allSalesData
       const start = new Date(startDate)
@@ -97,7 +127,6 @@ export default function Home() {
 
   const filteredData = getFilteredData()
 
-  // Cálculos Financeiros
   const currentFinancials = useMemo(() => {
       return filteredData.reduce((acc, item) => ({
           gross: acc.gross + Number(item.revenue || 0),
@@ -106,10 +135,9 @@ export default function Home() {
       }), { gross: 0, costChapa: 0, costFreight: 0 })
   }, [filteredData])
 
-  // Identificador do mês para salvar os dados manuais
   const currentMonthKey = useMemo(() => {
       if (filterMode === 'month' && startDate) {
-          return startDate.substring(0, 7) // '2025-01'
+          return startDate.substring(0, 7) 
       }
       return ''
   }, [startDate, filterMode])
@@ -130,7 +158,6 @@ export default function Home() {
              <div className="flex gap-4 items-center flex-wrap justify-center">
                 <span className="hidden lg:flex text-xs font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 items-center gap-1"><CheckCircle size={12} /> {allSalesData.length.toLocaleString()} Reg.</span>
                 <div className="flex bg-slate-100 p-1 rounded-lg">
-                    {/* Botões atualizados para usar changeTab */}
                     <TabButton active={activeTab === 'overview'} onClick={() => changeTab('overview')} icon={<LayoutDashboard size={16}/>} label="Geral" />
                     <TabButton active={activeTab === 'financial'} onClick={() => changeTab('financial')} icon={<Calculator size={16}/>} label="Simulador" />
                     <TabButton active={activeTab === 'annual'} onClick={() => changeTab('annual')} icon={<CalendarDays size={16}/>} label="Anual" />
@@ -153,7 +180,11 @@ export default function Home() {
         {/* GERAL */}
         {dataLoaded && activeTab === 'overview' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                <DateRangeFilter startDate={startDate} endDate={endDate} onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} onFilterModeChange={setFilterMode} />
+                <DateRangeFilter 
+                    startDate={startDate} endDate={endDate} 
+                    onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                    onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
+                />
                 <DashboardOverview data={filteredData} />
                 <MaterialRanking data={filteredData} />
                 <RevenueChart data={filteredData} />
@@ -164,13 +195,11 @@ export default function Home() {
         {dataLoaded && activeTab === 'financial' && (
              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                 <DateRangeFilter 
-                    startDate={startDate} 
-                    endDate={endDate} 
-                    onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} 
-                    onFilterModeChange={setFilterMode}
+                    startDate={startDate} endDate={endDate} 
+                    onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                    onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
                     onlyMonthMode={true} 
                 />
-                
                 <FinancialSimulator 
                     grossRevenue={currentFinancials.gross + currentFinancials.costFreight} 
                     costChapa={currentFinancials.costChapa}     
@@ -186,7 +215,11 @@ export default function Home() {
         {/* VENDEDORES */}
         {dataLoaded && activeTab === 'sellers' && (
              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                <DateRangeFilter startDate={startDate} endDate={endDate} onDateChange={(s, e) => { setStartDate(s); setEndDate(e); }} onFilterModeChange={setFilterMode} />
+                <DateRangeFilter 
+                    startDate={startDate} endDate={endDate} 
+                    onDateChange={(s, e) => handleFilterChange(s, e, filterMode)} 
+                    onFilterModeChange={(m) => handleFilterChange(startDate, endDate, m)} 
+                />
                 <SellerAnalysis data={filteredData} showGoals={filterMode === 'month'} />
              </div>
         )}
