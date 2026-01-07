@@ -7,7 +7,6 @@ import {
   LayoutDashboard, Calculator, CalendarDays, Users, Upload, CheckCircle, Loader2, LogOut 
 } from 'lucide-react'
 
-// Imports dos Componentes
 import FileUpload from '@/components/FileUpload'
 import DashboardOverview from '@/components/DashboardOverview'
 import RevenueChart from '@/components/RevenueChart'
@@ -18,6 +17,7 @@ import ClearDataButton from '@/components/ClearDataButton'
 import DateRangeFilter from '@/components/DateRangeFilter'
 import MaterialRanking from '@/components/MaterialRanking'
 
+// Definição clara do tipo
 type FilterState = {
     start: string
     end: string
@@ -32,6 +32,8 @@ export default function Home() {
   const [dataLoaded, setDataLoaded] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [allSalesData, setAllSalesData] = useState<any[]>([]) 
+  
+  // Estado que libera a visualização (evita piscar tela vazia)
   const [filtersReady, setFiltersReady] = useState(false)
   
   // Estados de Filtro Independentes
@@ -39,7 +41,7 @@ export default function Home() {
   const [financialFilter, setFinancialFilter] = useState<FilterState>({ start: '', end: '', mode: 'month' })
   const [sellersFilter, setSellersFilter] = useState<FilterState>({ start: '', end: '', mode: 'month' })
 
-  // 1. Auth & Data Fetch
+  // 1. Auth & Data Fetch & Recuperação de Estado
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser()
@@ -63,16 +65,21 @@ export default function Home() {
       if (allRows.length > 0) {
         allRows.sort((a, b) => new Date(a.sale_date).getTime() - new Date(b.sale_date).getTime())
         
-        // Datas padrão
-        const defaultStart = new Date(allRows[0].sale_date).toISOString().split('T')[0]
-        const defaultEnd = new Date(allRows[allRows.length - 1].sale_date).toISOString().split('T')[0]
-        const defaultState: FilterState = { start: defaultStart, end: defaultEnd, mode: 'month' }
+        // Datas padrão (Mês atual dos dados)
+        const lastDate = new Date(allRows[allRows.length - 1].sale_date)
+        const firstDayOfMonth = new Date(lastDate.getFullYear(), lastDate.getMonth(), 1).toISOString().split('T')[0]
+        const lastDayOfMonth = lastDate.toISOString().split('T')[0]
 
+        const defaultState: FilterState = { start: firstDayOfMonth, end: lastDayOfMonth, mode: 'month' }
+
+        // Helper para carregar
         const getInitialFilter = (key: string): FilterState => {
             const saved = localStorage.getItem(key)
             if (saved) {
-                const parsed = JSON.parse(saved)
-                if (parsed.start && parsed.end) return parsed
+                try {
+                    const parsed = JSON.parse(saved)
+                    if (parsed.start && parsed.end && (parsed.mode === 'month' || parsed.mode === 'range')) return parsed
+                } catch (e) { console.error('Erro ao ler filtro', e) }
             }
             return defaultState
         }
@@ -90,23 +97,41 @@ export default function Home() {
     init()
   }, [])
 
-  // --- FUNÇÕES DE ATUALIZAÇÃO DE FILTRO ---
-  const updateOverview = (start: string, end: string, mode?: 'month'|'range') => {
-      const effectiveMode = mode ? mode : 'range'
-      const newState = { start, end, mode: effectiveMode }
+  // --- FUNÇÕES DE ATUALIZAÇÃO SEGURAS ---
+  
+  // Atualiza GERAL
+  const setOverviewDate = (start: string, end: string) => {
+      // Se mudou data manualmente, vira Range
+      const newState: FilterState = { start, end, mode: 'range' }
+      setOverviewFilter(newState)
+      localStorage.setItem('bi_filter_overview', JSON.stringify(newState))
+  }
+  const setOverviewMode = (mode: 'month'|'range') => {
+      // Se clicou no botão de modo, mantém datas (o componente DateRangeFilter ajusta as datas depois se necessário)
+      // Aqui só salvamos o modo preferido
+      const newState = { ...overviewFilter, mode }
       setOverviewFilter(newState)
       localStorage.setItem('bi_filter_overview', JSON.stringify(newState))
   }
 
-  const updateFinancial = (start: string, end: string, mode?: 'month'|'range') => {
-      const newState = { start, end, mode: 'month' as const }
+  // Atualiza FINANCEIRO (Sempre mensal)
+  const setFinancialDate = (start: string, end: string) => {
+      const newState: FilterState = { start, end, mode: 'month' }
       setFinancialFilter(newState)
       localStorage.setItem('bi_filter_financial', JSON.stringify(newState))
   }
 
-  const updateSellers = (start: string, end: string, mode?: 'month'|'range') => {
-      const effectiveMode = mode ? mode : 'range'
-      const newState = { start, end, mode: effectiveMode }
+  // Atualiza VENDEDORES (Correção do Bug das Metas)
+  const setSellersDate = (start: string, end: string) => {
+      // Se o usuário mudou as datas, assumimos Período Livre ('range'), o que ESCONDE as metas
+      const newState: FilterState = { start, end, mode: 'range' }
+      setSellersFilter(newState)
+      localStorage.setItem('bi_filter_sellers', JSON.stringify(newState))
+  }
+  const setSellersMode = (mode: 'month'|'range') => {
+      // Se o usuário clicou no botão "Por Mês", forçamos o modo 'month'
+      // Isso vai exibir as metas novamente
+      const newState = { ...sellersFilter, mode }
       setSellersFilter(newState)
       localStorage.setItem('bi_filter_sellers', JSON.stringify(newState))
   }
@@ -116,29 +141,21 @@ export default function Home() {
       localStorage.setItem('bi_active_tab', tab)
   }
 
-  // --- LOGOUT COM HARD REDIRECT (CORREÇÃO FINAL) ---
   const handleLogout = async () => { 
-      // 1. Limpa memória local imediatamente
       localStorage.clear()
-      
-      try {
-          // 2. Tenta avisar o servidor
-          await supabase.auth.signOut()
-      } catch (e) {
-          console.error("Erro ao desconectar:", e)
-      } finally {
-          // 3. HARD RELOAD: Força o navegador a ir para a página de login
-          // Isso ignora o roteamento do React e garante que a página seja limpa
-          window.location.href = '/login'
-      }
+      try { await supabase.auth.signOut() } catch (e) { console.error(e) }
+      window.location.href = '/login'
   }
 
-  // --- FILTRAGEM ---
+  // --- FILTRAGEM SEGURA ---
   const filterData = (data: any[], filter: FilterState) => {
-      if (!filter.start || !filter.end) return data
+      // Proteção contra datas vazias
+      if (!data || data.length === 0 || !filter.start || !filter.end) return []
+      
       const start = new Date(filter.start)
       const end = new Date(filter.end)
-      end.setHours(23, 59, 59, 999)
+      end.setHours(23, 59, 59, 999) // Garante o final do dia
+      
       return data.filter(item => {
           const itemDate = new Date(item.sale_date)
           return itemDate >= start && itemDate <= end
@@ -164,17 +181,14 @@ export default function Home() {
 
   if (isLoading) return (<div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-400"><Loader2 className="w-10 h-10 animate-spin mb-4 text-cyan-600" /><p>Carregando sistema seguro...</p></div>)
 
+  // Só mostra conteúdo quando dados E filtros estiverem prontos
   const showContent = dataLoaded && filtersReady
 
   return (
     <main className="min-h-screen bg-slate-50 flex flex-col items-center">
       <div className="w-full bg-white border-b border-slate-200 px-6 py-4 shadow-sm z-10 sticky top-0">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-          <div>
-            <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <span className="bg-cyan-600 text-white px-2 py-1 rounded text-sm">BI</span> Marmoraria
-            </h1>
-          </div>
+          <div><h1 className="text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-cyan-600 text-white px-2 py-1 rounded text-sm">BI</span> Marmoraria</h1></div>
           {!dataLoaded && (<div className="w-full md:w-auto"><FileUpload /></div>)}
           {dataLoaded && (
              <div className="flex gap-4 items-center flex-wrap justify-center">
@@ -185,11 +199,7 @@ export default function Home() {
                     <TabButton active={activeTab === 'annual'} onClick={() => changeTab('annual')} icon={<CalendarDays size={16}/>} label="Anual" />
                     <TabButton active={activeTab === 'sellers'} onClick={() => changeTab('sellers')} icon={<Users size={16}/>} label="Vendedores" />
                 </div>
-                <div className="flex items-center gap-1 border-l border-slate-200 pl-4 ml-2">
-                    <ClearDataButton />
-                    {/* Botão de Sair */}
-                    <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Sair"><LogOut size={20} /></button>
-                </div>
+                <div className="flex items-center gap-1 border-l border-slate-200 pl-4 ml-2"><ClearDataButton /><button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Sair"><LogOut size={20} /></button></div>
              </div>
           )}
         </div>
@@ -204,8 +214,8 @@ export default function Home() {
         <div className={activeTab === 'overview' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={overviewFilter.start} endDate={overviewFilter.end} 
-                onDateChange={(s, e) => updateOverview(s, e)} 
-                onFilterModeChange={(m) => updateOverview(overviewFilter.start, overviewFilter.end, m)} 
+                onDateChange={setOverviewDate} 
+                onFilterModeChange={setOverviewMode} 
             />
             <DashboardOverview data={dataOverview} />
             <MaterialRanking data={dataOverview} />
@@ -216,8 +226,8 @@ export default function Home() {
         <div className={activeTab === 'financial' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={financialFilter.start} endDate={financialFilter.end} 
-                onDateChange={(s, e) => updateFinancial(s, e)} 
-                onFilterModeChange={(m) => updateFinancial(financialFilter.start, financialFilter.end, m)} 
+                onDateChange={setFinancialDate} 
+                onFilterModeChange={() => {}} // Simulador é travado em mensal, ignora modo
                 onlyMonthMode={true} 
             />
             <FinancialSimulator 
@@ -237,9 +247,13 @@ export default function Home() {
         <div className={activeTab === 'sellers' && showContent ? 'block space-y-6 animate-in fade-in' : 'hidden'}>
             <DateRangeFilter 
                 startDate={sellersFilter.start} endDate={sellersFilter.end} 
-                onDateChange={(s, e) => updateSellers(s, e)} 
-                onFilterModeChange={(m) => updateSellers(sellersFilter.start, sellersFilter.end, m)} 
+                // CORREÇÃO CRUCIAL:
+                // Se mudar data -> vira 'range' (esconde metas)
+                // Se clicar botão modo -> assume o modo clicado
+                onDateChange={setSellersDate} 
+                onFilterModeChange={setSellersMode} 
             />
+            {/* O showGoals agora obedece estritamente ao modo */}
             <SellerAnalysis data={dataSellers} showGoals={sellersFilter.mode === 'month'} />
         </div>
 
