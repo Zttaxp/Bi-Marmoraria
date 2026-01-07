@@ -85,15 +85,21 @@ export default function AnnualReport({ data }: { data: any[] }) {
               return date.getFullYear() === selectedYear && (date.getMonth() + 1) === month
           })
 
+          // Nota: csvRevenue aqui é o valor LÍQUIDO (sem frete) que vem do banco
           const csvRevenue = salesInMonth.reduce((acc, item) => acc + (item.revenue || 0), 0)
           const csvCostChapa = salesInMonth.reduce((acc, item) => acc + (item.cost || 0), 0)
           const csvCostFreight = salesInMonth.reduce((acc, item) => acc + (item.freight || 0), 0)
+
+          // === CORREÇÃO AQUI ===
+          // Somamos o frete de volta para obter o BRUTO real.
+          // Assim, quando descontarmos o frete lá embaixo, a conta bate.
+          const csvRevenueGross = csvRevenue + csvCostFreight
 
           // B. DEFINIR VALORES (REAL vs SIMULADO)
           let revenue, costChapa, costFreight, taxRate, defRate, commRate, otherVar, fixedCost
 
           if (viewMode === 'REAL') {
-              revenue = csvRevenue
+              revenue = csvRevenueGross // <--- Usa o valor corrigido
               costChapa = csvCostChapa
               costFreight = csvCostFreight
               // Usa valor do mês se tiver, senão usa config global
@@ -105,7 +111,7 @@ export default function AnnualReport({ data }: { data: any[] }) {
               fixedCost = Number(dbRow.fixed_cost) || 0
           } else {
               // Simulado: Prioridade -> Valor Salvo Sim > Valor Real Salvo > CSV/Global
-              revenue = dbRow.sim_revenue !== undefined ? Number(dbRow.sim_revenue) : csvRevenue
+              revenue = dbRow.sim_revenue !== undefined ? Number(dbRow.sim_revenue) : csvRevenueGross // <--- Usa o valor corrigido no fallback
               costChapa = dbRow.sim_cost_chapa !== undefined ? Number(dbRow.sim_cost_chapa) : csvCostChapa
               costFreight = dbRow.sim_cost_freight !== undefined ? Number(dbRow.sim_cost_freight) : csvCostFreight
               

@@ -81,12 +81,10 @@ export default function Home() {
 
   const filteredData = getFilteredData()
 
-  // === AQUI ESTÁ A CORREÇÃO MÁGICA ===
-  // Agora separamos: gross (Receita), costChapa (Só custo) e costFreight (Só frete)
+  // Cálculos Financeiros
   const currentFinancials = useMemo(() => {
       return filteredData.reduce((acc, item) => ({
           gross: acc.gross + Number(item.revenue || 0),
-          // O segredo: Somar colunas separadas
           costChapa: acc.costChapa + Number(item.cost || 0),     
           costFreight: acc.costFreight + Number(item.freight || 0) 
       }), { gross: 0, costChapa: 0, costFreight: 0 })
@@ -145,7 +143,7 @@ export default function Home() {
             </div>
         )}
 
-        {/* SIMULADOR (Corrigido o envio das props) */}
+        {/* SIMULADOR (CORRIGIDO: SOMA O FRETE DE VOLTA AO BRUTO) */}
         {dataLoaded && activeTab === 'financial' && (
              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                 <DateRangeFilter 
@@ -157,9 +155,9 @@ export default function Home() {
                 />
                 
                 <FinancialSimulator 
-                    grossRevenue={currentFinancials.gross} 
-                    costChapa={currentFinancials.costChapa}     // Agora envia o valor correto
-                    costFreight={currentFinancials.costFreight} // Agora envia o valor correto
+                    grossRevenue={currentFinancials.gross + currentFinancials.costFreight} // <--- AQUI ESTÁ A CORREÇÃO
+                    costChapa={currentFinancials.costChapa}     
+                    costFreight={currentFinancials.costFreight} 
                     monthKey={currentMonthKey}
                 />
              </div>
