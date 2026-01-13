@@ -29,31 +29,7 @@ export default function FinancialSimulator({
   
   const supabase = createClient()
   
-  // --- 1. MEMÓRIA DE DADOS (A Verdade Absoluta para o Banco) ---
-  // Diferente do stateRef anterior, este não depende de useEffect.
-  // Nós vamos atualizar ele MANUALMENTE a cada digitação.
-  const dataRef = useRef({
-      sim_revenue: grossRevenue,
-      sim_cost_chapa: costChapa,
-      sim_cost_freight: costFreight,
-      sim_fixed_cost: 85000,
-      sim_variable_cost: 0,
-      sim_tax_rate: 6.0,
-      sim_default_rate: 1.5,
-      sim_commission_rate: 0,
-      
-      // Globais para fallback
-      tax_rate: 6.0,
-      default_rate: 1.5,
-      commission_rate: 0,
-      fixed_cost: 85000,
-      variable_cost: 0
-  })
-
-  // Timer para controlar o salvamento automático (Debounce)
-  const saveTimerRef = useRef<NodeJS.Timeout | null>(null)
-
-  // --- 2. ESTADOS VISUAIS (Para a tela ser rápida) ---
+  // --- 1. ESTADOS VISUAIS (A Verdade da Tela) ---
   const [globalTax, setGlobalTax] = useState(6.00)
   const [globalDefault, setGlobalDefault] = useState(1.50)
   const [globalCommission, setGlobalCommission] = useState(0)
@@ -76,7 +52,31 @@ export default function FinancialSimulator({
   const [isSaving, setIsSaving] = useState(false) 
   const [isLoading, setIsLoading] = useState(false)
 
-  // --- 3. CARREGAR DADOS ---
+  // --- 2. O ESPIÃO (Mantém uma cópia atualizada para o salvamento) ---
+  const latestDataRef = useRef({
+      tax_rate: 6.0, default_rate: 1.5, commission_rate: 0,
+      fixed_cost: 85000, variable_cost: 0,
+      sim_revenue: grossRevenue, sim_cost_chapa: costChapa, sim_cost_freight: costFreight,
+      sim_fixed_cost: 85000, sim_variable_cost: 0,
+      sim_tax_rate: 6.0, sim_default_rate: 1.5, sim_commission_rate: 0
+  })
+
+  // Timer para o Debounce
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  // --- 3. SINCRONIZAÇÃO (O Espião trabalha aqui) ---
+  // Toda vez que qualquer estado visual muda, atualizamos a Ref imediatamente.
+  useEffect(() => {
+      latestDataRef.current = {
+          tax_rate: globalTax, default_rate: globalDefault, commission_rate: globalCommission,
+          fixed_cost: baseFixedCost, variable_cost: baseOtherVarCost,
+          sim_revenue: simRevenue, sim_cost_chapa: simCostChapa, sim_cost_freight: simCostFreight,
+          sim_fixed_cost: simFixedCost, sim_variable_cost: simOtherVarCost,
+          sim_tax_rate: simTaxRate, sim_default_rate: simDefaultRate, sim_commission_rate: simCommissionRate
+      }
+  }, [globalTax, globalDefault, globalCommission, baseFixedCost, baseOtherVarCost, simRevenue, simCostChapa, simCostFreight, simFixedCost, simOtherVarCost, simTaxRate, simDefaultRate, simCommissionRate])
+
+  // --- 4. CARREGAR DADOS ---
   useEffect(() => {
     const loadData = async () => {
         if (!monthKey) return
@@ -85,7 +85,7 @@ export default function FinancialSimulator({
         const { data: { user } } = await supabase.auth.getUser()
         if(!user) return
 
-        // A. Config Global
+        // Globais
         let { data: globalConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).maybeSingle()
         if (!globalConfig) {
             const defaults = { user_id: user.id, tax_rate: 6.0, default_rate: 1.5, commission_rate: 0 }
@@ -97,59 +97,48 @@ export default function FinancialSimulator({
         const gComm = Number(globalConfig.commission_rate)
         setGlobalTax(gTax); setGlobalDefault(gDef); setGlobalCommission(gComm)
 
-        // B. Dados do Mês
+        // Dados do Mês (Único)
         const { data: monthData } = await supabase
             .from('financial_monthly_data')
             .select('*')
             .eq('month_key', monthKey)
-            .maybeSingle() // Seguro pois você já rodou o SQL de unicidade
+            .maybeSingle()
         
-        // Função para atualizar TUDO (Visual + Memória)
-        const syncData = (d: any) => {
-            // Valores Reais
-            const rFix = d.fixed_cost !== null ? Number(d.fixed_cost) : 85000
-            const rVar = Number(d.variable_cost) || 0
-            
-            // Valores Simulados (Com fallback para Real)
-            const sRev = d.sim_revenue !== null ? Number(d.sim_revenue) : grossRevenue
-            const sChapa = d.sim_cost_chapa !== null ? Number(d.sim_cost_chapa) : costChapa
-            const sFreight = d.sim_cost_freight !== null ? Number(d.sim_cost_freight) : costFreight
-            const sFix = d.sim_fixed_cost !== null ? Number(d.sim_fixed_cost) : rFix
-            const sVar = d.sim_variable_cost !== null ? Number(d.sim_variable_cost) : rVar
-            
-            const sTax = d.sim_tax_rate ?? gTax
-            const sDef = d.sim_default_rate ?? gDef
-            const sComm = d.sim_commission_rate ?? gComm
+        // Função auxiliar para popular o estado
+        const populateState = (d: any) => {
+            // Reais
+            setBaseFixedCost(d.fixed_cost !== null ? Number(d.fixed_cost) : 85000)
+            setBaseOtherVarCost(Number(d.variable_cost) || 0)
 
-            // 1. Atualiza Visual
-            setBaseFixedCost(rFix); setBaseOtherVarCost(rVar)
-            setSimRevenue(sRev); setSimCostChapa(sChapa); setSimCostFreight(sFreight)
-            setSimFixedCost(sFix); setSimOtherVarCost(sVar)
-            setSimTaxRate(sTax); setSimDefaultRate(sDef); setSimCommissionRate(sComm)
-
-            // 2. Atualiza Memória (REF)
-            dataRef.current = {
-                tax_rate: gTax, default_rate: gDef, commission_rate: gComm,
-                fixed_cost: rFix, variable_cost: rVar,
-                sim_revenue: sRev, sim_cost_chapa: sChapa, sim_cost_freight: sFreight,
-                sim_fixed_cost: sFix, sim_variable_cost: sVar,
-                sim_tax_rate: sTax, sim_default_rate: sDef, sim_commission_rate: sComm
-            }
+            // Simulados (Fallback para Real se null)
+            setSimRevenue(d.sim_revenue !== null ? Number(d.sim_revenue) : grossRevenue)
+            setSimCostChapa(d.sim_cost_chapa !== null ? Number(d.sim_cost_chapa) : costChapa)
+            setSimCostFreight(d.sim_cost_freight !== null ? Number(d.sim_cost_freight) : costFreight)
+            setSimFixedCost(d.sim_fixed_cost !== null ? Number(d.sim_fixed_cost) : (d.fixed_cost ?? 85000))
+            setSimOtherVarCost(d.sim_variable_cost !== null ? Number(d.sim_variable_cost) : (d.variable_cost ?? 0))
+            
+            setSimTaxRate(d.sim_tax_rate ?? gTax)
+            setSimDefaultRate(d.sim_default_rate ?? gDef)
+            setSimCommissionRate(d.sim_commission_rate ?? gComm)
         }
 
         if (monthData) {
-            syncData(monthData)
+            populateState(monthData)
         } else {
-            // Inicializa novo mês
+            // Novo Mês
             const initial = {
                 fixed_cost: 85000, variable_cost: 0,
                 sim_revenue: grossRevenue, sim_cost_chapa: costChapa, sim_cost_freight: costFreight,
                 sim_fixed_cost: 85000, sim_variable_cost: 0,
                 sim_tax_rate: gTax, sim_default_rate: gDef, sim_commission_rate: gComm
             }
-            syncData(initial)
-            
-            // Cria no banco (seguro com onConflict)
+            // Popula visualmente
+            setBaseFixedCost(85000); setBaseOtherVarCost(0)
+            setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight)
+            setSimFixedCost(85000); setSimOtherVarCost(0)
+            setSimTaxRate(gTax); setSimDefaultRate(gDef); setSimCommissionRate(gComm)
+
+            // Salva inicial
             await supabase.from('financial_monthly_data').upsert({
                 user_id: user.id, month_key: monthKey,
                 tax_rate: gTax, default_rate: gDef, commission_rate: gComm,
@@ -159,22 +148,22 @@ export default function FinancialSimulator({
         setIsLoading(false)
     }
     loadData()
-  }, [monthKey]) // Recarrega se mudar o mês
+  }, [monthKey]) // Removemos dependências de props para evitar reset indesejado
 
-  // --- 4. ENGINE DE SALVAMENTO (DEBOUNCED) ---
-  // Esta função agenda o salvamento. Se chamada de novo rápido, cancela o anterior.
-  const scheduleSave = useCallback(() => {
-      // Cancela timer anterior (Isso impede salvar 10x ao digitar rápido)
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+  // --- 5. FUNÇÃO DE SALVAR (O Carteiro) ---
+  const triggerSave = useCallback(() => {
+      // Limpa timer anterior
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
       
       setIsSaving(true)
 
-      saveTimerRef.current = setTimeout(async () => {
+      // Agenda novo save para daqui 1 segundo
+      saveTimeoutRef.current = setTimeout(async () => {
           const { data: { user } } = await supabase.auth.getUser()
           if (!user) return
 
-          // PEGA O DADO DA REF (Sempre atualizado instantaneamente)
-          const payload = { ...dataRef.current }
+          // O Carteiro lê a carta do Espião (latestDataRef), não pergunta pro Estado
+          const payload = { ...latestDataRef.current }
 
           await supabase.from('financial_monthly_data').upsert({
               user_id: user.id,
@@ -183,85 +172,47 @@ export default function FinancialSimulator({
           }, { onConflict: 'user_id, month_key' })
           
           setIsSaving(false)
-      }, 1000) // Espera 1 segundo após parar de digitar
+      }, 1000)
   }, [monthKey])
 
-  // --- 5. HANDLERS (ATUALIZAM TELA E MEMÓRIA AO MESMO TEMPO) ---
+  // --- 6. HANDLERS (Simples: Atualiza Estado -> Chama Save) ---
   
-  const updateSimVal = (val: number, setter: any, field: string) => {
-      setter(val) // 1. Visual (Rápido)
-      
-      // 2. Memória (Instantâneo - Mapeia para o nome do banco)
-      if(field === 'revenue') dataRef.current.sim_revenue = val
-      if(field === 'chapa') dataRef.current.sim_cost_chapa = val
-      if(field === 'freight') dataRef.current.sim_cost_freight = val
-      if(field === 'fix') dataRef.current.sim_fixed_cost = val
-      if(field === 'otherVar') dataRef.current.sim_variable_cost = val
-      
-      // 3. Agenda Save
-      scheduleSave()
+  const updateSimVal = (val: number, setter: any) => {
+      setter(val)
+      triggerSave()
   }
 
-  const updateSimPct = (val: number, setter: any, field: string) => {
+  const updateSimPct = (val: number, setter: any) => {
       setter(val)
-      if(field === 'tax') dataRef.current.sim_tax_rate = val
-      if(field === 'def') dataRef.current.sim_default_rate = val
-      if(field === 'comm') dataRef.current.sim_commission_rate = val
-      scheduleSave()
+      triggerSave()
   }
   
-  // Edita Valor R$ -> Recalcula % -> Salva ambos
-  const updateSimValFromPct = (val: number, setterPct: any, field: string) => {
-      const rev = dataRef.current.sim_revenue || 0
-      const newPct = rev > 0 ? (val / rev) * 100 : 0
-      
-      setterPct(newPct) // Visual
-      
-      // Memória
-      if(field === 'tax') dataRef.current.sim_tax_rate = newPct
-      if(field === 'def') dataRef.current.sim_default_rate = newPct
-      if(field === 'comm') dataRef.current.sim_commission_rate = newPct
-      
-      scheduleSave()
+  const updateSimValFromPct = (val: number, setterPct: any) => {
+      // Para recalcular percentual, precisamos da receita atual (visual)
+      // Como estamos dentro do render, simRevenue é confiável para o cálculo instantâneo
+      const currentRev = simRevenue || 0 
+      const newPct = currentRev > 0 ? (val / currentRev) * 100 : 0
+      setterPct(newPct)
+      triggerSave()
   }
 
-  const handleRealUpdate = (val: number, setter: any, field: 'fix'|'var') => {
+  const handleRealUpdate = (val: number, setter: any) => {
       setter(val)
-      if(field === 'fix') dataRef.current.fixed_cost = val
-      if(field === 'var') dataRef.current.variable_cost = val
-      scheduleSave()
+      triggerSave()
   }
 
   const resetValues = () => {
-      // Recupera dados "reais" atuais para resetar a simulação
-      const rRev = grossRevenue
-      const rChapa = costChapa
-      const rFreight = costFreight
-      const rFix = baseFixedCost
-      const rVar = baseOtherVarCost
-      const rTax = globalTax
-      const rDef = globalDefault
-      const rComm = globalCommission
-
-      // Visual
-      setSimRevenue(rRev); setSimCostChapa(rChapa); setSimCostFreight(rFreight)
-      setSimFixedCost(rFix); setSimOtherVarCost(rVar)
-      setSimTaxRate(rTax); setSimDefaultRate(rDef); setSimCommissionRate(rComm)
-
-      // Memória
-      dataRef.current.sim_revenue = rRev
-      dataRef.current.sim_cost_chapa = rChapa
-      dataRef.current.sim_cost_freight = rFreight
-      dataRef.current.sim_fixed_cost = rFix
-      dataRef.current.sim_variable_cost = rVar
-      dataRef.current.sim_tax_rate = rTax
-      dataRef.current.sim_default_rate = rDef
-      dataRef.current.sim_commission_rate = rComm
-
-      scheduleSave()
+      // Reseta Visual para os valores "Reais" (Props ou Base)
+      setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight)
+      setSimFixedCost(baseFixedCost); setSimOtherVarCost(baseOtherVarCost)
+      setSimTaxRate(globalTax); setSimDefaultRate(globalDefault); setSimCommissionRate(globalCommission)
+      
+      // O useEffect "Espião" vai perceber a mudança de estado e atualizar a Ref automaticamente
+      // Então só precisamos chamar o save
+      triggerSave()
   }
 
-  // --- CÁLCULOS DRE (Visual apenas) ---
+  // CÁLCULOS DRE
   const calc = (rev: number, chapa: number, freight: number, tax: number, def: number, comm: number, otherVar: number, fix: number) => {
      const safeRev = rev || 0
      const valTax = safeRev * (tax / 100); const valDef = safeRev * (def / 100); const valComm = safeRev * (comm / 100)
@@ -285,12 +236,8 @@ export default function FinancialSimulator({
       
       await supabase.from('financial_global_config').upsert({ user_id: user.id, tax_rate: globalTax, default_rate: globalDefault, commission_rate: globalCommission })
       
-      // Atualiza Memória e Salva Mês
-      dataRef.current.tax_rate = globalTax
-      dataRef.current.default_rate = globalDefault
-      dataRef.current.commission_rate = globalCommission
-      
-      scheduleSave()
+      // Força save do mês para garantir sincronia
+      triggerSave()
       setIsSavingGlobal(false)
   }
 
@@ -320,16 +267,16 @@ export default function FinancialSimulator({
               <div className="col-span-4 text-right pl-4 text-cyan-600">Cenário Simulado (Editável)</div>
           </div>
 
-          <DRELine label=" (+) Faturamento Bruto" realVal={grossRevenue} realPct={100} simVal={simRevenue} simPct={100} onSimValChange={(v: number) => updateSimVal(v, setSimRevenue, 'revenue')} isHeader />
-          <DRELine label=" (-) Impostos" realVal={real.valTax} realPct={globalTax} simVal={sim.valTax} simPct={simTaxRate} onSimPctChange={(v: number) => updateSimPct(v, setSimTaxRate, 'tax')} onSimValChange={(v: number) => updateSimValFromPct(v, setSimTaxRate, 'tax')} isPercentEditable isNegative />
-          <DRELine label=" (-) Inadimplência" realVal={real.valDef} realPct={globalDefault} simVal={sim.valDef} simPct={simDefaultRate} onSimPctChange={(v: number) => updateSimPct(v, setSimDefaultRate, 'def')} onSimValChange={(v: number) => updateSimValFromPct(v, setSimDefaultRate, 'def')} isPercentEditable isNegative />
+          <DRELine label=" (+) Faturamento Bruto" realVal={grossRevenue} realPct={100} simVal={simRevenue} simPct={100} onSimValChange={(v: number) => updateSimVal(v, setSimRevenue)} isHeader />
+          <DRELine label=" (-) Impostos" realVal={real.valTax} realPct={globalTax} simVal={sim.valTax} simPct={simTaxRate} onSimPctChange={(v: number) => updateSimPct(v, setSimTaxRate)} onSimValChange={(v: number) => updateSimValFromPct(v, setSimTaxRate)} isPercentEditable isNegative />
+          <DRELine label=" (-) Inadimplência" realVal={real.valDef} realPct={globalDefault} simVal={sim.valDef} simPct={simDefaultRate} onSimPctChange={(v: number) => updateSimPct(v, setSimDefaultRate)} onSimValChange={(v: number) => updateSimValFromPct(v, setSimDefaultRate)} isPercentEditable isNegative />
           <DREResult label=" (=) Receita Líquida" realVal={real.netRevenue} simVal={sim.netRevenue} baseRevenueReal={grossRevenue} baseRevenueSim={simRevenue} />
-          <DRELine label=" (-) CMV (Custo Chapa)" realVal={costChapa} realPct={grossRevenue > 0 ? costChapa/grossRevenue*100 : 0} simVal={simCostChapa} simPct={simRevenue > 0 ? simCostChapa/simRevenue*100 : 0} onSimValChange={(v: number) => updateSimVal(v, setSimCostChapa, 'chapa')} onSimPctChange={(v: number) => updateSimVal(v, setSimCostChapa, 'chapa')} isNegative />
-          <DRELine label=" (-) Frete" realVal={costFreight} realPct={grossRevenue > 0 ? costFreight/grossRevenue*100 : 0} simVal={simCostFreight} simPct={simRevenue > 0 ? simCostFreight/simRevenue*100 : 0} onSimValChange={(v: number) => updateSimVal(v, setSimCostFreight, 'freight')} onSimPctChange={(v: number) => updateSimVal(v, setSimCostFreight, 'freight')} isNegative />
-          <DRELine label=" (-) Comissões" realVal={real.valComm} realPct={globalCommission} simVal={sim.valComm} simPct={simCommissionRate} onSimPctChange={(v: number) => updateSimPct(v, setSimCommissionRate, 'comm')} onSimValChange={(v: number) => updateSimValFromPct(v, setSimCommissionRate, 'comm')} isPercentEditable isNegative />
-          <DRELine label=" (-) Outros Custos Variáveis (R$)" realVal={baseOtherVarCost} realPct={grossRevenue > 0 ? baseOtherVarCost/grossRevenue*100 : 0} simVal={simOtherVarCost} simPct={simRevenue > 0 ? simOtherVarCost/simRevenue*100 : 0} onRealValChange={(v: number) => handleRealUpdate(v, setBaseOtherVarCost, 'var')} onSimValChange={(v: number) => updateSimVal(v, setSimOtherVarCost, 'otherVar')} readOnly={!monthKey} isNegative />
+          <DRELine label=" (-) CMV (Custo Chapa)" realVal={costChapa} realPct={grossRevenue > 0 ? costChapa/grossRevenue*100 : 0} simVal={simCostChapa} simPct={simRevenue > 0 ? simCostChapa/simRevenue*100 : 0} onSimValChange={(v: number) => updateSimVal(v, setSimCostChapa)} onSimPctChange={(v: number) => updateSimVal(v, setSimCostChapa)} isNegative />
+          <DRELine label=" (-) Frete" realVal={costFreight} realPct={grossRevenue > 0 ? costFreight/grossRevenue*100 : 0} simVal={simCostFreight} simPct={simRevenue > 0 ? simCostFreight/simRevenue*100 : 0} onSimValChange={(v: number) => updateSimVal(v, setSimCostFreight)} onSimPctChange={(v: number) => updateSimVal(v, setSimCostFreight)} isNegative />
+          <DRELine label=" (-) Comissões" realVal={real.valComm} realPct={globalCommission} simVal={sim.valComm} simPct={simCommissionRate} onSimPctChange={(v: number) => updateSimPct(v, setSimCommissionRate)} onSimValChange={(v: number) => updateSimValFromPct(v, setSimCommissionRate)} isPercentEditable isNegative />
+          <DRELine label=" (-) Outros Custos Variáveis (R$)" realVal={baseOtherVarCost} realPct={grossRevenue > 0 ? baseOtherVarCost/grossRevenue*100 : 0} simVal={simOtherVarCost} simPct={simRevenue > 0 ? simOtherVarCost/simRevenue*100 : 0} onRealValChange={(v: number) => handleRealUpdate(v, setBaseOtherVarCost)} onSimValChange={(v: number) => updateSimVal(v, setSimOtherVarCost)} readOnly={!monthKey} isNegative />
           <DREResult label=" (=) Margem de Contribuição" realVal={real.contribMargin} simVal={sim.contribMargin} baseRevenueReal={grossRevenue} baseRevenueSim={simRevenue} isHighlight />
-          <DRELine label=" (-) Custos Fixos Mensais" realVal={baseFixedCost} realPct={grossRevenue > 0 ? baseFixedCost/grossRevenue*100 : 0} simVal={simFixedCost} simPct={simRevenue > 0 ? simFixedCost/simRevenue*100 : 0} onRealValChange={(v: number) => handleRealUpdate(v, setBaseFixedCost, 'fix')} onSimValChange={(v: number) => updateSimVal(v, setSimFixedCost, 'fix')} readOnly={!monthKey} isNegative />
+          <DRELine label=" (-) Custos Fixos Mensais" realVal={baseFixedCost} realPct={grossRevenue > 0 ? baseFixedCost/grossRevenue*100 : 0} simVal={simFixedCost} simPct={simRevenue > 0 ? simFixedCost/simRevenue*100 : 0} onRealValChange={(v: number) => handleRealUpdate(v, setBaseFixedCost)} onSimValChange={(v: number) => updateSimVal(v, setSimFixedCost)} readOnly={!monthKey} isNegative />
 
           <div className="grid grid-cols-12 bg-slate-800 text-white py-4 px-4 items-center">
               <div className="col-span-4 font-bold text-sm uppercase">(=) Lucro Líquido</div>
