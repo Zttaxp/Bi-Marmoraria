@@ -18,14 +18,15 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
   const [viewMode, setViewMode] = useState<'REAL' | 'SIM'>('REAL')
   const [financialData, setFinancialData] = useState<Record<string, any>>({})
   const [globalConfig, setGlobalConfig] = useState<any>(null)
-  const [loading, setLoading] = useState(false) // Começa false pois o fetch inicial será no useEffect
+  const [loading, setLoading] = useState(false)
+  const [lastUpdate, setLastUpdate] = useState<string>('')
 
-  // Calcula anos disponíveis baseando-se na planilha E no ano atual
+  // Calcula anos disponíveis
   const availableYears = useMemo(() => {
       const years = new Set(data.map(d => new Date(d.sale_date).getFullYear()))
-      years.add(new Date().getFullYear()) // Garante que o ano atual sempre apareça
+      years.add(new Date().getFullYear())
+      // Adiciona anos do banco de dados também
       if (financialData) {
-          // Adiciona anos que tenham dados salvos no banco também
           Object.keys(financialData).forEach(key => {
               const y = parseInt(key.split('-')[0])
               if (!isNaN(y)) years.add(y)
@@ -37,27 +38,24 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
   // Busca dados do banco
   const fetchFinancials = useCallback(async () => {
       setLoading(true)
-      
       const { data: { user } } = await supabase.auth.getUser()
+      
       if (user) {
          const { data: gConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).maybeSingle()
          setGlobalConfig(gConfig || { tax_rate: 6, default_rate: 1.5, commission_rate: 0 })
       }
 
       const { data: dbData } = await supabase.from('financial_monthly_data').select('*')
-      
       const map: Record<string, any> = {}
       if (dbData) {
-          dbData.forEach((row: any) => { 
-              // Garante formato YYYY-MM
-              map[row.month_key] = row 
-          })
+          dbData.forEach((row: any) => { map[row.month_key] = row })
       }
       setFinancialData(map)
+      setLastUpdate(new Date().toLocaleTimeString())
       setLoading(false)
   }, [])
 
-  // Atualiza sempre que a aba fica visível
+  // Recarrega ao abrir a aba
   useEffect(() => {
       if (isVisible) {
           fetchFinancials()
@@ -68,55 +66,75 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
       const months = Array.from({ length: 12 }, (_, i) => i + 1)
       
       return months.map(month => {
-          // Gera chave YYYY-MM (ex: 2025-02)
           const monthKey = `${selectedYear}-${String(month).padStart(2, '0')}`
-          const dbRow = financialData[monthKey] || {}
-          
-          const defTax = globalConfig?.tax_rate ?? 6.0
-          const defDef = globalConfig?.default_rate ?? 1.5
-          const defComm = globalConfig?.commission_rate ?? 0
+          const dbRow = financialData[monthKey]
+          const hasDbData = !!dbRow // Verifica se existe registro no banco
 
-          // Vendas da Planilha (CSV)
+          // --- 1. DADOS DA PLANILHA (CSV) ---
           const salesInMonth = data.filter(d => {
               const date = new Date(d.sale_date)
               return date.getFullYear() === selectedYear && (date.getMonth() + 1) === month
           })
-
           const csvRevenue = salesInMonth.reduce((acc, item) => acc + (item.revenue || 0), 0)
           const csvCostChapa = salesInMonth.reduce((acc, item) => acc + (item.cost || 0), 0)
           const csvCostFreight = salesInMonth.reduce((acc, item) => acc + (item.freight || 0), 0)
           const csvRevenueGross = csvRevenue + csvCostFreight
 
+          // --- 2. CONFIGURAÇÕES PADRÃO ---
+          const defTax = globalConfig?.tax_rate ?? 6.0
+          const defDef = globalConfig?.default_rate ?? 1.5
+          const defComm = globalConfig?.commission_rate ?? 0
+
           let revenue, costChapa, costFreight, taxRate, defRate, commRate, otherVar, fixedCost
 
-          const dbFixed = dbRow.fixed_cost !== undefined && dbRow.fixed_cost !== null ? Number(dbRow.fixed_cost) : 85000
+          // --- 3. LÓGICA DE DECISÃO (AQUI ESTÁ A CORREÇÃO) ---
           
           if (viewMode === 'REAL') {
-              // Modo Real: Prioriza CSV, mas usa DB para custos fixos/variáveis extras
+              // Cenário Real: Usa CSV. Se não tiver CSV, tenta ver se tem algo salvo manualmente como "Real" no banco.
               revenue = csvRevenueGross
               costChapa = csvCostChapa
               costFreight = csvCostFreight
-              taxRate = dbRow.tax_rate !== undefined ? Number(dbRow.tax_rate) : defTax
-              defRate = dbRow.default_rate !== undefined ? Number(dbRow.default_rate) : defDef
-              commRate = dbRow.commission_rate !== undefined ? Number(dbRow.commission_rate) : defComm
-              otherVar = Number(dbRow.variable_cost) || 0
-              fixedCost = dbFixed
+              
+              // Parâmetros e Custos Extras vêm do banco (ou padrão)
+              taxRate = hasDbData && dbRow.tax_rate !== null ? Number(dbRow.tax_rate) : defTax
+              defRate = hasDbData && dbRow.default_rate !== null ? Number(dbRow.default_rate) : defDef
+              commRate = hasDbData && dbRow.commission_rate !== null ? Number(dbRow.commission_rate) : defComm
+              otherVar = hasDbData ? (Number(dbRow.variable_cost) || 0) : 0
+              fixedCost = hasDbData && dbRow.fixed_cost !== null ? Number(dbRow.fixed_cost) : 85000
+
           } else {
-              // Modo Simulado: Prioriza TOTALMENTE o banco de dados (sim_...) se existir
-              revenue = dbRow.sim_revenue !== undefined && dbRow.sim_revenue !== null ? Number(dbRow.sim_revenue) : csvRevenueGross
-              costChapa = dbRow.sim_cost_chapa !== undefined && dbRow.sim_cost_chapa !== null ? Number(dbRow.sim_cost_chapa) : csvCostChapa
-              costFreight = dbRow.sim_cost_freight !== undefined && dbRow.sim_cost_freight !== null ? Number(dbRow.sim_cost_freight) : csvCostFreight
+              // Cenário Simulado: PRIORIDADE TOTAL AO BANCO (colunas sim_*)
               
-              taxRate = dbRow.sim_tax_rate !== undefined ? Number(dbRow.sim_tax_rate) : (dbRow.tax_rate !== undefined ? Number(dbRow.tax_rate) : defTax)
-              defRate = dbRow.sim_default_rate !== undefined ? Number(dbRow.sim_default_rate) : (dbRow.default_rate !== undefined ? Number(dbRow.default_rate) : defDef)
-              commRate = dbRow.sim_commission_rate !== undefined ? Number(dbRow.sim_commission_rate) : (dbRow.commission_rate !== undefined ? Number(dbRow.commission_rate) : defComm)
-              
-              otherVar = dbRow.sim_variable_cost !== undefined ? Number(dbRow.sim_variable_cost) : (Number(dbRow.variable_cost) || 0)
-              
-              const simFixDB = dbRow.sim_fixed_cost !== undefined && dbRow.sim_fixed_cost !== null ? Number(dbRow.sim_fixed_cost) : null
-              fixedCost = simFixDB !== null ? simFixDB : dbFixed
+              // Receita
+              if (hasDbData && dbRow.sim_revenue !== null) revenue = Number(dbRow.sim_revenue)
+              else revenue = csvRevenueGross // Fallback para CSV se não editou
+
+              // Custos Variáveis
+              if (hasDbData && dbRow.sim_cost_chapa !== null) costChapa = Number(dbRow.sim_cost_chapa)
+              else costChapa = csvCostChapa
+
+              if (hasDbData && dbRow.sim_cost_freight !== null) costFreight = Number(dbRow.sim_cost_freight)
+              else costFreight = csvCostFreight
+
+              // Taxas (%)
+              if (hasDbData && dbRow.sim_tax_rate !== null) taxRate = Number(dbRow.sim_tax_rate)
+              else taxRate = (hasDbData && dbRow.tax_rate !== null) ? Number(dbRow.tax_rate) : defTax
+
+              if (hasDbData && dbRow.sim_default_rate !== null) defRate = Number(dbRow.sim_default_rate)
+              else defRate = (hasDbData && dbRow.default_rate !== null) ? Number(dbRow.default_rate) : defDef
+
+              if (hasDbData && dbRow.sim_commission_rate !== null) commRate = Number(dbRow.sim_commission_rate)
+              else commRate = (hasDbData && dbRow.commission_rate !== null) ? Number(dbRow.commission_rate) : defComm
+
+              // Custos Fixos/Outros (Simulado)
+              if (hasDbData && dbRow.sim_variable_cost !== null) otherVar = Number(dbRow.sim_variable_cost)
+              else otherVar = hasDbData ? (Number(dbRow.variable_cost) || 0) : 0
+
+              if (hasDbData && dbRow.sim_fixed_cost !== null) fixedCost = Number(dbRow.sim_fixed_cost)
+              else fixedCost = hasDbData && dbRow.fixed_cost !== null ? Number(dbRow.fixed_cost) : 85000
           }
 
+          // --- 4. CÁLCULOS FINAIS ---
           const valTax = revenue * (taxRate / 100)
           const valDef = revenue * (defRate / 100)
           const netRevenue = revenue - valTax - valDef
@@ -139,9 +157,10 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
       })
       return t
   }, [monthlyDRE])
-  const yearMargin = yearTotals.revenue > 0 ? (yearTotals.netProfit / yearTotals.revenue) * 100 : 0
-  const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })
   
+  const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })
+  const yearMargin = yearTotals.revenue > 0 ? (yearTotals.netProfit / yearTotals.revenue) * 100 : 0
+
   const handleExport = () => {
       const ws = XLSX.utils.json_to_sheet(monthlyDRE.map(m => ({
           Mês: m.monthName, 'Faturamento': m.revenue, 'Impostos': m.valTax, 'Comissões': m.valComm, 'Fixos': m.fixedCost, 'Lucro': m.netProfit
@@ -157,8 +176,6 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
     ],
   }
 
-  if (loading && Object.keys(financialData).length === 0) return <div className="p-12 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto"/> Carregando dados financeiros...</div>
-
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
@@ -168,13 +185,14 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
                  <button onClick={() => setViewMode('SIM')} className={`px-4 py-2 text-sm font-bold rounded-md transition-all flex items-center gap-2 ${viewMode === 'SIM' ? 'bg-cyan-50 text-cyan-700 shadow-sm border border-cyan-100' : 'text-slate-400 hover:text-slate-600'}`}><ArrowRightLeft size={16}/> Cenário Simulado</button>
              </div>
              
-             <div className="flex gap-2">
+             <div className="flex gap-2 items-center">
                 <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="bg-slate-50 border border-slate-200 text-slate-700 text-sm font-bold rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-cyan-500">
                     {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
-                <button onClick={fetchFinancials} className="p-2.5 bg-slate-50 text-slate-500 hover:text-cyan-600 hover:bg-cyan-50 border border-slate-200 rounded-lg transition-colors" title="Atualizar Dados">
+                <button onClick={fetchFinancials} className="p-2.5 bg-slate-50 text-slate-500 hover:text-cyan-600 hover:bg-cyan-50 border border-slate-200 rounded-lg transition-colors" title="Forçar Atualização">
                     <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
                 </button>
+                {lastUpdate && <span className="text-[10px] text-slate-400 hidden lg:inline">Atualizado: {lastUpdate}</span>}
              </div>
          </div>
          <div className="flex gap-4 items-center">
@@ -182,9 +200,16 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
              <button onClick={handleExport} className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"><Download size={20} /></button>
          </div>
       </div>
+      
+      {/* Gráfico */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm h-72">
-          <Bar data={chartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' as const } }, scales: { y: { grid: { display: true, color: '#f1f5f9' } }, x: { grid: { display: false } } } }} />
+          {loading && Object.keys(financialData).length === 0 ? 
+            <div className="h-full flex items-center justify-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin"/></div> : 
+            <Bar data={chartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' as const } }, scales: { y: { grid: { display: true, color: '#f1f5f9' } }, x: { grid: { display: false } } } }} />
+          }
       </div>
+
+      {/* Tabela */}
       <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
               <table className="w-full text-xs text-left whitespace-nowrap">
