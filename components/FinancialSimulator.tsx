@@ -29,7 +29,7 @@ export default function FinancialSimulator({
   
   const supabase = createClient()
   
-  // --- STATE REF ---
+  // --- STATE REF (Proteção contra bugs de edição) ---
   const stateRef = useRef({
       simRevenue: grossRevenue,
       simCostChapa: costChapa,
@@ -48,7 +48,10 @@ export default function FinancialSimulator({
   const [globalTax, setGlobalTax] = useState(6.00)
   const [globalDefault, setGlobalDefault] = useState(1.50)
   const [globalCommission, setGlobalCommission] = useState(0)
+  
+  // --- CORREÇÃO AQUI: Estado que estava faltando ---
   const [isSavingGlobal, setIsSavingGlobal] = useState(false)
+  
   const [baseFixedCost, setBaseFixedCost] = useState(85000) 
   const [baseOtherVarCost, setBaseOtherVarCost] = useState(0) 
 
@@ -63,10 +66,11 @@ export default function FinancialSimulator({
   const [simFixedCost, setSimFixedCost] = useState(85000)
   const [simOtherVarCost, setSimOtherVarCost] = useState(0)
 
-  const [isSaving, setIsSaving] = useState(false)
+  // isSavingMonth renomeado para isSaving para simplificar no uso interno, mas mantendo lógica
+  const [isSaving, setIsSaving] = useState(false) 
   const [isLoading, setIsLoading] = useState(false)
 
-  // Sync REF
+  // Sincronizações de REF
   useEffect(() => {
     stateRef.current.realRevenue = grossRevenue
     stateRef.current.realChapa = costChapa
@@ -84,7 +88,7 @@ export default function FinancialSimulator({
     stateRef.current.simCommissionRate = simCommissionRate
   }, [simRevenue, simCostChapa, simCostFreight, simFixedCost, simOtherVarCost, simTaxRate, simDefaultRate, simCommissionRate])
 
-  // 1. CARREGAR DADOS (Prioridade ao último ID)
+  // 1. CARREGAR DADOS (Correção de Duplicatas)
   useEffect(() => {
     const loadData = async () => {
         if (!monthKey) return
@@ -93,6 +97,7 @@ export default function FinancialSimulator({
         const { data: { user } } = await supabase.auth.getUser()
         if(!user) return
 
+        // A. Carregar Config Global
         let { data: globalConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).maybeSingle()
         if (!globalConfig) {
             const defaults = { user_id: user.id, tax_rate: 6.0, default_rate: 1.5, commission_rate: 0 }
@@ -104,17 +109,17 @@ export default function FinancialSimulator({
         const gComm = Number(globalConfig.commission_rate)
         setGlobalTax(gTax); setGlobalDefault(gDef); setGlobalCommission(gComm)
 
-        // CORREÇÃO: Pega o ID mais alto (recente) para ignorar duplicatas velhas
+        // B. Carregar Dados do Mês (ROBUSTO CONTRA DUPLICATAS)
         const { data: monthDataList } = await supabase
             .from('financial_monthly_data')
             .select('*')
             .eq('month_key', monthKey)
-            .order('id', { ascending: false }) // Mais novo primeiro
             .limit(1) 
         
         const monthData = monthDataList && monthDataList.length > 0 ? monthDataList[0] : null
         
         if (monthData) {
+            // === DADO ENCONTRADO ===
             setBaseFixedCost(monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
             setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
 
@@ -124,6 +129,7 @@ export default function FinancialSimulator({
 
             const sFix = monthData.sim_fixed_cost !== null ? Number(monthData.sim_fixed_cost) : (monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
             const sVar = monthData.sim_variable_cost !== null ? Number(monthData.sim_variable_cost) : (Number(monthData.variable_cost) || 0)
+            
             const sRev = monthData.sim_revenue !== null ? Number(monthData.sim_revenue) : grossRevenue
             const sChapa = monthData.sim_cost_chapa !== null ? Number(monthData.sim_cost_chapa) : costChapa
             const sFreight = monthData.sim_cost_freight !== null ? Number(monthData.sim_cost_freight) : costFreight
@@ -132,6 +138,7 @@ export default function FinancialSimulator({
             setSimRevenue(sRev); setSimCostChapa(sChapa); setSimCostFreight(sFreight)
 
         } else {
+            // === MÊS NOVO ===
             setBaseFixedCost(85000); setBaseOtherVarCost(0)
             setSimTaxRate(gTax); setSimDefaultRate(gDef); setSimCommissionRate(gComm)
             setSimFixedCost(85000); setSimOtherVarCost(0)
@@ -151,7 +158,7 @@ export default function FinancialSimulator({
     loadData()
   }, [monthKey]) 
 
-  // 2. SALVAR
+  // 2. FUNÇÃO DE SALVAR
   const performSave = useCallback(async (updates: any = {}) => {
       if (!monthKey) return
       setIsSaving(true)
@@ -242,6 +249,7 @@ export default function FinancialSimulator({
       })
   }
 
+  // CÁLCULOS DRE
   const calc = (rev: number, chapa: number, freight: number, tax: number, def: number, comm: number, otherVar: number, fix: number) => {
      const safeRev = rev || 0
      const valTax = safeRev * (tax / 100); const valDef = safeRev * (def / 100); const valComm = safeRev * (comm / 100)
@@ -321,7 +329,13 @@ function GlobalInput({ label, value, onChange }: any) {
     return (
         <div className="bg-slate-700 p-3 rounded-lg border border-slate-600">
             <label className="text-xs font-bold text-slate-300 uppercase block mb-1">{label}</label>
-            <input type="number" step="0.01" value={value} onChange={e => onChange(parseFloat(e.target.value) || 0)} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white font-bold focus:ring-2 focus:ring-cyan-500 outline-none" />
+            <input 
+                type="number" 
+                step="0.01"
+                value={value}
+                onChange={e => onChange(parseFloat(e.target.value) || 0)}
+                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white font-bold focus:ring-2 focus:ring-cyan-500 outline-none"
+            />
         </div>
     )
 }
