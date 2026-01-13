@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { RefreshCcw, TrendingUp, TrendingDown, Settings, Save, Loader2 } from 'lucide-react'
 import { createClient } from '../app/utils/supabase/client'
 
@@ -29,7 +29,7 @@ export default function FinancialSimulator({
   
   const supabase = createClient()
   
-  // --- ESTADOS VISUAIS (Simples e Diretos) ---
+  // --- 1. VISUAL STATE (What you see - Fast) ---
   const [globalTax, setGlobalTax] = useState(6.00)
   const [globalDefault, setGlobalDefault] = useState(1.50)
   const [globalCommission, setGlobalCommission] = useState(0)
@@ -52,7 +52,18 @@ export default function FinancialSimulator({
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
 
-  // --- 1. CARREGAR DADOS ---
+  // --- 2. SHADOW STATE REF (The Source of Truth for Saving) ---
+  // This ref will always hold the exact values currently on screen.
+  // The save function will read FROM HERE to avoid stale state issues.
+  const dataRef = useRef({
+      tax_rate: 6.0, default_rate: 1.5, commission_rate: 0,
+      fixed_cost: 85000, variable_cost: 0,
+      sim_revenue: grossRevenue, sim_cost_chapa: costChapa, sim_cost_freight: costFreight,
+      sim_fixed_cost: 85000, sim_variable_cost: 0,
+      sim_tax_rate: 6.0, sim_default_rate: 1.5, sim_commission_rate: 0
+  })
+
+  // --- 3. LOAD DATA (Populate both State and Ref) ---
   useEffect(() => {
     const loadData = async () => {
         if (!monthKey) return
@@ -61,7 +72,7 @@ export default function FinancialSimulator({
         const { data: { user } } = await supabase.auth.getUser()
         if(!user) return
 
-        // Globais
+        // Global Config
         let { data: globalConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).maybeSingle()
         if (!globalConfig) {
             const defaults = { user_id: user.id, tax_rate: 6.0, default_rate: 1.5, commission_rate: 0 }
@@ -74,135 +85,151 @@ export default function FinancialSimulator({
         
         setGlobalTax(gTax); setGlobalDefault(gDef); setGlobalCommission(gComm)
 
-        // Dados do Mês (Simples e Seguro com maybeSingle)
+        // Month Data
         const { data: monthData } = await supabase
             .from('financial_monthly_data')
             .select('*')
             .eq('month_key', monthKey)
             .maybeSingle()
         
-        if (monthData) {
-            setBaseFixedCost(monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
-            setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
+        // Helper to sync everything
+        const sync = (d: any) => {
+            const fFix = d.fixed_cost !== null ? Number(d.fixed_cost) : 85000
+            const fVar = Number(d.variable_cost) || 0
+            
+            const sRev = d.sim_revenue !== null ? Number(d.sim_revenue) : grossRevenue
+            const sChapa = d.sim_cost_chapa !== null ? Number(d.sim_cost_chapa) : costChapa
+            const sFreight = d.sim_cost_freight !== null ? Number(d.sim_cost_freight) : costFreight
+            const sFix = d.sim_fixed_cost !== null ? Number(d.sim_fixed_cost) : fFix
+            const sVar = d.sim_variable_cost !== null ? Number(d.sim_variable_cost) : fVar
+            
+            const sTax = d.sim_tax_rate ?? gTax
+            const sDef = d.sim_default_rate ?? gDef
+            const sComm = d.sim_commission_rate ?? gComm
 
-            setSimTaxRate(monthData.sim_tax_rate ?? gTax)
-            setSimDefaultRate(monthData.sim_default_rate ?? gDef)
-            setSimCommissionRate(monthData.sim_commission_rate ?? gComm)
+            // Update Visuals
+            setBaseFixedCost(fFix); setBaseOtherVarCost(fVar)
+            setSimRevenue(sRev); setSimCostChapa(sChapa); setSimCostFreight(sFreight)
+            setSimFixedCost(sFix); setSimOtherVarCost(sVar)
+            setSimTaxRate(sTax); setSimDefaultRate(sDef); setSimCommissionRate(sComm)
 
-            // Lógica de Fallback para exibir dados reais se não houver simulação
-            setSimRevenue(monthData.sim_revenue !== null ? Number(monthData.sim_revenue) : grossRevenue)
-            setSimCostChapa(monthData.sim_cost_chapa !== null ? Number(monthData.sim_cost_chapa) : costChapa)
-            setSimCostFreight(monthData.sim_cost_freight !== null ? Number(monthData.sim_cost_freight) : costFreight)
-            setSimFixedCost(monthData.sim_fixed_cost !== null ? Number(monthData.sim_fixed_cost) : (monthData.fixed_cost ?? 85000))
-            setSimOtherVarCost(monthData.sim_variable_cost !== null ? Number(monthData.sim_variable_cost) : (monthData.variable_cost ?? 0))
-
-        } else {
-            // Inicializa mês novo com dados reais
-            setBaseFixedCost(85000); setBaseOtherVarCost(0)
-            setSimTaxRate(gTax); setSimDefaultRate(gDef); setSimCommissionRate(gComm)
-            setSimFixedCost(85000); setSimOtherVarCost(0)
-            setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight)
-
-            // Cria o registro inicial
-            await supabase.from('financial_monthly_data').upsert({
-                user_id: user.id, month_key: monthKey,
+            // Update Ref (Shadow State)
+            dataRef.current = {
                 tax_rate: gTax, default_rate: gDef, commission_rate: gComm,
+                fixed_cost: fFix, variable_cost: fVar,
+                sim_revenue: sRev, sim_cost_chapa: sChapa, sim_cost_freight: sFreight,
+                sim_fixed_cost: sFix, sim_variable_cost: sVar,
+                sim_tax_rate: sTax, sim_default_rate: sDef, sim_commission_rate: sComm
+            }
+        }
+
+        if (monthData) {
+            sync(monthData)
+        } else {
+            // Init new month
+            const initial = {
                 fixed_cost: 85000, variable_cost: 0,
                 sim_revenue: grossRevenue, sim_cost_chapa: costChapa, sim_cost_freight: costFreight,
                 sim_fixed_cost: 85000, sim_variable_cost: 0,
                 sim_tax_rate: gTax, sim_default_rate: gDef, sim_commission_rate: gComm
+            }
+            sync(initial) // Populate visual/ref
+            
+            // Create in DB
+            await supabase.from('financial_monthly_data').upsert({
+                user_id: user.id, month_key: monthKey,
+                tax_rate: gTax, default_rate: gDef, commission_rate: gComm,
+                ...initial
             }, { onConflict: 'user_id, month_key' })
         }
         setIsLoading(false)
     }
     loadData()
-  }, [monthKey])
+  }, [monthKey]) 
 
-  // --- 2. FUNÇÃO DE SALVAR SIMPLIFICADA (O "Jeito Antigo") ---
-  // Recebe os valores EXATOS que você quer salvar como argumento.
-  // Não tenta ler do estado (que pode estar velho), confia no que foi passado.
-  const saveToDb = async (payload: any) => {
+  // --- 4. SAVE FUNCTION (Reads from Ref) ---
+  const saveToDb = async () => {
       setIsSaving(true)
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
-      // Mescla o payload novo com os estados atuais para garantir que o objeto esteja completo
-      // Isso evita salvar "apenas" o campo editado e apagar os outros
-      const fullPayload = {
+      // READ FROM REF (Always fresh)
+      const payload = {
           user_id: user.id,
           month_key: monthKey,
-          tax_rate: globalTax, default_rate: globalDefault, commission_rate: globalCommission,
-          fixed_cost: baseFixedCost, variable_cost: baseOtherVarCost,
-          sim_revenue: simRevenue,
-          sim_cost_chapa: simCostChapa,
-          sim_cost_freight: simCostFreight,
-          sim_fixed_cost: simFixedCost,
-          sim_variable_cost: simOtherVarCost,
-          sim_tax_rate: simTaxRate,
-          sim_default_rate: simDefaultRate,
-          sim_commission_rate: simCommissionRate,
-          ...payload // O que veio no argumento tem prioridade (é o valor novo)
+          ...dataRef.current // Sends everything currently in the shadow state
       }
 
-      await supabase.from('financial_monthly_data').upsert(fullPayload, { onConflict: 'user_id, month_key' })
+      await supabase.from('financial_monthly_data').upsert(payload, { onConflict: 'user_id, month_key' })
       setIsSaving(false)
   }
 
-  // --- 3. HANDLERS DIRETOS ---
+  // --- 5. HANDLERS (Update Visual + Update Ref + Save) ---
   
   const updateSimVal = (val: number, setter: any, field: string) => {
-      setter(val) // Atualiza tela
+      setter(val) // Visual
       
-      // Monta objeto de salvamento manual
-      const dbField = field === 'revenue' ? 'sim_revenue' : 
-                      field === 'chapa' ? 'sim_cost_chapa' : 
-                      field === 'freight' ? 'sim_cost_freight' : 
-                      field === 'fix' ? 'sim_fixed_cost' : 'sim_variable_cost'
+      // Update Shadow Ref manually
+      if(field === 'revenue') dataRef.current.sim_revenue = val
+      if(field === 'chapa') dataRef.current.sim_cost_chapa = val
+      if(field === 'freight') dataRef.current.sim_cost_freight = val
+      if(field === 'fix') dataRef.current.sim_fixed_cost = val
+      if(field === 'otherVar') dataRef.current.sim_variable_cost = val
       
-      saveToDb({ [dbField]: val }) // Salva imediatamente
+      saveToDb()
   }
 
   const updateSimPct = (val: number, setter: any, field: string) => {
       setter(val)
-      const dbField = field === 'tax' ? 'sim_tax_rate' : 
-                      field === 'def' ? 'sim_default_rate' : 'sim_commission_rate'
-      saveToDb({ [dbField]: val })
+      
+      if(field === 'tax') dataRef.current.sim_tax_rate = val
+      if(field === 'def') dataRef.current.sim_default_rate = val
+      if(field === 'comm') dataRef.current.sim_commission_rate = val
+      
+      saveToDb()
   }
   
   const updateSimValFromPct = (val: number, setterPct: any, field: string) => {
-      // Usa o valor atual do estado simRevenue. Como não tem debounce, o risco de stale closure é menor aqui.
-      const currentRev = simRevenue || 0
+      // Calculation relies on Ref for safety
+      const currentRev = dataRef.current.sim_revenue || 0
       const newPct = currentRev > 0 ? (val / currentRev) * 100 : 0
       
-      setterPct(newPct)
+      setterPct(newPct) // Visual
       
-      const dbField = field === 'tax' ? 'sim_tax_rate' : 
-                      field === 'def' ? 'sim_default_rate' : 'sim_commission_rate'
+      if(field === 'tax') dataRef.current.sim_tax_rate = newPct
+      if(field === 'def') dataRef.current.sim_default_rate = newPct
+      if(field === 'comm') dataRef.current.sim_commission_rate = newPct
       
-      saveToDb({ [dbField]: newPct })
+      saveToDb()
   }
 
   const handleRealUpdate = (val: number, setter: any, field: 'fix'|'var') => {
       setter(val)
-      const dbField = field === 'fix' ? 'fixed_cost' : 'variable_cost'
-      saveToDb({ [dbField]: val })
+      if(field === 'fix') dataRef.current.fixed_cost = val
+      if(field === 'var') dataRef.current.variable_cost = val
+      saveToDb()
   }
 
   const resetValues = () => {
-      // Reseta Visual
+      // Reset Visuals
       setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight)
       setSimFixedCost(baseFixedCost); setSimOtherVarCost(baseOtherVarCost)
       setSimTaxRate(globalTax); setSimDefaultRate(globalDefault); setSimCommissionRate(globalCommission)
       
-      // Salva Resetado
-      saveToDb({
-          sim_revenue: grossRevenue, sim_cost_chapa: costChapa, sim_cost_freight: costFreight,
-          sim_fixed_cost: baseFixedCost, sim_variable_cost: baseOtherVarCost,
-          sim_tax_rate: globalTax, sim_default_rate: globalDefault, sim_commission_rate: globalCommission
-      })
+      // Reset Ref
+      dataRef.current.sim_revenue = grossRevenue
+      dataRef.current.sim_cost_chapa = costChapa
+      dataRef.current.sim_cost_freight = costFreight
+      dataRef.current.sim_fixed_cost = baseFixedCost
+      dataRef.current.sim_variable_cost = baseOtherVarCost
+      dataRef.current.sim_tax_rate = globalTax
+      dataRef.current.sim_default_rate = globalDefault
+      dataRef.current.sim_commission_rate = globalCommission
+
+      saveToDb()
   }
 
-  // --- CÁLCULOS DRE ---
+  // --- CALCULATIONS (Visual only) ---
   const calc = (rev: number, chapa: number, freight: number, tax: number, def: number, comm: number, otherVar: number, fix: number) => {
      const safeRev = rev || 0
      const valTax = safeRev * (tax / 100); const valDef = safeRev * (def / 100); const valComm = safeRev * (comm / 100)
@@ -218,7 +245,7 @@ export default function FinancialSimulator({
   const sim = calc(simRevenue, simCostChapa, simCostFreight, simTaxRate, simDefaultRate, simCommissionRate, simOtherVarCost, simFixedCost)
   const diffProfit = sim.netProfit - real.netProfit
 
-  // Salvar Globais
+  // Save Globals
   const saveGlobalParams = async () => {
       setIsSavingGlobal(true)
       const { data: { user } } = await supabase.auth.getUser()
@@ -226,8 +253,12 @@ export default function FinancialSimulator({
       
       await supabase.from('financial_global_config').upsert({ user_id: user.id, tax_rate: globalTax, default_rate: globalDefault, commission_rate: globalCommission })
       
-      // Atualiza o mês atual com as novas globais
-      saveToDb({ tax_rate: globalTax, default_rate: globalDefault, commission_rate: globalCommission })
+      // Update Ref Global
+      dataRef.current.tax_rate = globalTax
+      dataRef.current.default_rate = globalDefault
+      dataRef.current.commission_rate = globalCommission
+      
+      saveToDb()
       setIsSavingGlobal(false)
   }
 
@@ -287,6 +318,7 @@ export default function FinancialSimulator({
   )
 }
 
+// Subcomponents remain unchanged from your preferred version
 function GlobalInput({ label, value, onChange }: any) {
     return (
         <div className="bg-slate-700 p-3 rounded-lg border border-slate-600">
