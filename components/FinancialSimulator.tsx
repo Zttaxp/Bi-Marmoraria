@@ -119,7 +119,6 @@ export default function FinancialSimulator({
         const monthData = monthDataList && monthDataList.length > 0 ? monthDataList[0] : null
         
         if (monthData) {
-            // === DADO ENCONTRADO ===
             stateRef.current.id = monthData.id 
             console.log("Dados carregados com ID:", monthData.id)
 
@@ -141,7 +140,7 @@ export default function FinancialSimulator({
             setSimRevenue(sRev); setSimCostChapa(sChapa); setSimCostFreight(sFreight)
 
         } else {
-            // === MÊS NOVO (Criar imediatamente) ===
+            // === MÊS NOVO ===
             setBaseFixedCost(85000); setBaseOtherVarCost(0)
             setSimTaxRate(gTax); setSimDefaultRate(gDef); setSimCommissionRate(gComm)
             setSimFixedCost(85000); setSimOtherVarCost(0)
@@ -166,7 +165,7 @@ export default function FinancialSimulator({
     loadData()
   }, [monthKey]) 
 
-  // 2. FUNÇÃO DE SALVAR (ESTRATÉGIA: UPDATE DIRETO PELO ID)
+  // 2. FUNÇÃO DE SALVAR CORRIGIDA (Update Payload Cleaning)
   const performSave = useCallback(async (updates: any = {}) => {
       if (!monthKey) return
       setIsSaving(true)
@@ -174,12 +173,10 @@ export default function FinancialSimulator({
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
           const current = stateRef.current
-          const currentId = current.id // Pegamos o ID carregado
+          const currentId = current.id
 
-          const payload: any = {
-              user_id: user.id,
-              month_key: monthKey,
-              
+          // Dados APENAS financeiros (sem chaves únicas)
+          const financialData = {
               tax_rate: globalTax, 
               default_rate: globalDefault, 
               commission_rate: globalCommission,
@@ -202,21 +199,24 @@ export default function FinancialSimulator({
           let data = null
 
           if (currentId) {
-              // ESTRATÉGIA A: Se temos ID, usamos UPDATE direto. É infalível.
+              // ESTRATÉGIA A: Update limpo. 
+              // NÃO ENVIAR user_id nem month_key para evitar conflito de constraint
               const res = await supabase
                   .from('financial_monthly_data')
-                  .update(payload)
+                  .update(financialData) // <--- Payload limpo
                   .eq('id', currentId)
                   .select()
               error = res.error
               data = res.data
-              console.log("Salvando via UPDATE ID:", currentId, "Res:", res)
+              console.log("Salvando via UPDATE ID (Clean Payload):", currentId, "Res:", res)
           } else {
-              // ESTRATÉGIA B: Se não temos ID (raro, mas possível se load falhou), tentamos INSERT
-              // Usamos upsert aqui como fallback
+              // ESTRATÉGIA B: Insert/Upsert. 
+              // Aqui PRECISA das chaves
+              const fullPayload = { ...financialData, user_id: user.id, month_key: monthKey }
+              
               const res = await supabase
                   .from('financial_monthly_data')
-                  .upsert(payload, { onConflict: 'user_id, month_key' }) 
+                  .upsert(fullPayload, { onConflict: 'user_id, month_key' }) 
                   .select()
                   .single()
               error = res.error
