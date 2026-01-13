@@ -29,7 +29,7 @@ export default function FinancialSimulator({
   
   const supabase = createClient()
   
-  // --- STATE REF (Proteção contra bugs de edição) ---
+  // REF para blindar valores contra recargas indesejadas
   const stateRef = useRef({
       simRevenue: grossRevenue,
       simCostChapa: costChapa,
@@ -67,13 +67,14 @@ export default function FinancialSimulator({
   const [isSaving, setIsSaving] = useState(false) 
   const [isLoading, setIsLoading] = useState(false)
 
-  // Sincronizações de REF
+  // Sincroniza REF com Props
   useEffect(() => {
     stateRef.current.realRevenue = grossRevenue
     stateRef.current.realChapa = costChapa
     stateRef.current.realFreight = costFreight
   }, [grossRevenue, costChapa, costFreight])
 
+  // Sincroniza REF com Estados Visuais
   useEffect(() => {
     stateRef.current.simRevenue = simRevenue
     stateRef.current.simCostChapa = simCostChapa
@@ -85,7 +86,7 @@ export default function FinancialSimulator({
     stateRef.current.simCommissionRate = simCommissionRate
   }, [simRevenue, simCostChapa, simCostFreight, simFixedCost, simOtherVarCost, simTaxRate, simDefaultRate, simCommissionRate])
 
-  // 1. CARREGAR DADOS (Correção: Ordenação por ID Descendente)
+  // 1. CARREGAR DADOS
   useEffect(() => {
     const loadData = async () => {
         if (!monthKey) return
@@ -94,7 +95,6 @@ export default function FinancialSimulator({
         const { data: { user } } = await supabase.auth.getUser()
         if(!user) return
 
-        // A. Carregar Config Global
         let { data: globalConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).maybeSingle()
         if (!globalConfig) {
             const defaults = { user_id: user.id, tax_rate: 6.0, default_rate: 1.5, commission_rate: 0 }
@@ -106,20 +106,14 @@ export default function FinancialSimulator({
         const gComm = Number(globalConfig.commission_rate)
         setGlobalTax(gTax); setGlobalDefault(gDef); setGlobalCommission(gComm)
 
-        // B. Carregar Dados do Mês
-        // AQUI ESTÁ A MÁGICA: .order('id', { ascending: false })
-        // Isso garante que pegamos o registro MAIS NOVO (maior ID) se houver duplicatas.
-        const { data: monthDataList } = await supabase
+        // Agora que temos Unique Constraint no banco, podemos usar .single() ou .maybeSingle() sem medo
+        const { data: monthData } = await supabase
             .from('financial_monthly_data')
             .select('*')
             .eq('month_key', monthKey)
-            .order('id', { ascending: false }) 
-            .limit(1) 
-        
-        const monthData = monthDataList && monthDataList.length > 0 ? monthDataList[0] : null
+            .maybeSingle()
         
         if (monthData) {
-            // === DADO ENCONTRADO ===
             setBaseFixedCost(monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
             setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
 
@@ -129,36 +123,35 @@ export default function FinancialSimulator({
 
             const sFix = monthData.sim_fixed_cost !== null ? Number(monthData.sim_fixed_cost) : (monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
             const sVar = monthData.sim_variable_cost !== null ? Number(monthData.sim_variable_cost) : (Number(monthData.variable_cost) || 0)
-            
             const sRev = monthData.sim_revenue !== null ? Number(monthData.sim_revenue) : grossRevenue
             const sChapa = monthData.sim_cost_chapa !== null ? Number(monthData.sim_cost_chapa) : costChapa
             const sFreight = monthData.sim_cost_freight !== null ? Number(monthData.sim_cost_freight) : costFreight
 
             setSimFixedCost(sFix); setSimOtherVarCost(sVar)
             setSimRevenue(sRev); setSimCostChapa(sChapa); setSimCostFreight(sFreight)
-
         } else {
-            // === MÊS NOVO ===
+            // Inicializa novo mês
             setBaseFixedCost(85000); setBaseOtherVarCost(0)
             setSimTaxRate(gTax); setSimDefaultRate(gDef); setSimCommissionRate(gComm)
             setSimFixedCost(85000); setSimOtherVarCost(0)
             setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight)
 
-            await supabase.from('financial_monthly_data').insert({
+            // Tenta criar (Se já existir devido a race condition, o constraint bloqueia duplicidade)
+            await supabase.from('financial_monthly_data').upsert({
                 user_id: user.id, month_key: monthKey,
                 tax_rate: gTax, default_rate: gDef, commission_rate: gComm,
                 fixed_cost: 85000, variable_cost: 0,
                 sim_revenue: grossRevenue, sim_cost_chapa: costChapa, sim_cost_freight: costFreight,
                 sim_tax_rate: gTax, sim_default_rate: gDef, sim_commission_rate: gComm,
                 sim_fixed_cost: 85000, sim_variable_cost: 0
-            })
+            }, { onConflict: 'user_id, month_key' })
         }
         setIsLoading(false)
     }
     loadData()
   }, [monthKey]) 
 
-  // 2. FUNÇÃO DE SALVAR
+  // 2. FUNÇÃO DE SALVAR (Com Upsert Protegido pelo Constraint)
   const performSave = useCallback(async (updates: any = {}) => {
       if (!monthKey) return
       setIsSaving(true)
@@ -181,7 +174,10 @@ export default function FinancialSimulator({
               sim_default_rate: updates.def !== undefined ? updates.def : current.simDefaultRate,
               sim_commission_rate: updates.comm !== undefined ? updates.comm : current.simCommissionRate
           }
-          await supabase.from('financial_monthly_data').upsert(payload, { onConflict: 'user_id, month_key' })
+          
+          // O onConflict aqui AGORA VAI FUNCIONAR porque criamos o constraint no SQL
+          await supabase.from('financial_monthly_data')
+            .upsert(payload, { onConflict: 'user_id, month_key' })
       }
       setTimeout(() => setIsSaving(false), 500)
   }, [monthKey, globalTax, globalDefault, globalCommission, baseFixedCost, baseOtherVarCost])
