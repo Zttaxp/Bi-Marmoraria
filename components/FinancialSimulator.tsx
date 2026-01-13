@@ -30,7 +30,6 @@ export default function FinancialSimulator({
   const supabase = createClient()
   
   // --- STATE REF ---
-  // Mantemos o ID aqui apenas para controle interno, mas NÃO o enviaremos no save
   const stateRef = useRef({
       id: null as number | null, 
       simRevenue: grossRevenue,
@@ -122,6 +121,7 @@ export default function FinancialSimulator({
         if (monthData) {
             // === DADO ENCONTRADO ===
             stateRef.current.id = monthData.id 
+            console.log("Dados carregados com ID:", monthData.id)
 
             setBaseFixedCost(monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
             setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
@@ -141,7 +141,7 @@ export default function FinancialSimulator({
             setSimRevenue(sRev); setSimCostChapa(sChapa); setSimCostFreight(sFreight)
 
         } else {
-            // === MÊS NOVO ===
+            // === MÊS NOVO (Criar imediatamente) ===
             setBaseFixedCost(85000); setBaseOtherVarCost(0)
             setSimTaxRate(gTax); setSimDefaultRate(gDef); setSimCommissionRate(gComm)
             setSimFixedCost(85000); setSimOtherVarCost(0)
@@ -156,14 +156,17 @@ export default function FinancialSimulator({
                 sim_fixed_cost: 85000, sim_variable_cost: 0
             }).select().maybeSingle()
             
-            if (newData) stateRef.current.id = newData.id
+            if (newData) {
+                stateRef.current.id = newData.id
+                console.log("Novo mês criado com ID:", newData.id)
+            }
         }
         setIsLoading(false)
     }
     loadData()
   }, [monthKey]) 
 
-  // 2. FUNÇÃO DE SALVAR ROBUSTA (SEM ID NO PAYLOAD)
+  // 2. FUNÇÃO DE SALVAR (ESTRATÉGIA: UPDATE DIRETO PELO ID)
   const performSave = useCallback(async (updates: any = {}) => {
       if (!monthKey) return
       setIsSaving(true)
@@ -171,7 +174,8 @@ export default function FinancialSimulator({
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
           const current = stateRef.current
-          
+          const currentId = current.id // Pegamos o ID carregado
+
           const payload: any = {
               user_id: user.id,
               month_key: monthKey,
@@ -194,21 +198,36 @@ export default function FinancialSimulator({
               sim_commission_rate: updates.comm !== undefined ? updates.comm : current.simCommissionRate
           }
 
-          // FIX: REMOVIDO 'payload.id = current.id'. 
-          // O upsert encontrará a linha via (user_id, month_key) e fará update.
-          // Isso evita o erro de PKEY violation.
+          let error = null
+          let data = null
 
-          const { data, error } = await supabase
-              .from('financial_monthly_data')
-              .upsert(payload, { onConflict: 'user_id, month_key' }) 
-              .select()
-              .single()
+          if (currentId) {
+              // ESTRATÉGIA A: Se temos ID, usamos UPDATE direto. É infalível.
+              const res = await supabase
+                  .from('financial_monthly_data')
+                  .update(payload)
+                  .eq('id', currentId)
+                  .select()
+              error = res.error
+              data = res.data
+              console.log("Salvando via UPDATE ID:", currentId, "Res:", res)
+          } else {
+              // ESTRATÉGIA B: Se não temos ID (raro, mas possível se load falhou), tentamos INSERT
+              // Usamos upsert aqui como fallback
+              const res = await supabase
+                  .from('financial_monthly_data')
+                  .upsert(payload, { onConflict: 'user_id, month_key' }) 
+                  .select()
+                  .single()
+              error = res.error
+              data = res.data
+              console.log("Salvando via UPSERT (Fallback):", res)
+              if (data && data.id) stateRef.current.id = data.id
+          }
 
           if (error) {
-              console.error("ERRO AO SALVAR:", error)
-          } else if (data && !current.id) {
-              stateRef.current.id = data.id
-          }
+              console.error("ERRO CRÍTICO AO SALVAR:", error)
+          } 
       }
       setTimeout(() => setIsSaving(false), 500)
   }, [monthKey, globalTax, globalDefault, globalCommission, baseFixedCost, baseOtherVarCost])
