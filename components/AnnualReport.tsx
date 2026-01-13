@@ -21,11 +21,10 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
   const [loading, setLoading] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<string>('')
 
-  // Calcula anos disponíveis
+  // Define os anos disponíveis
   const availableYears = useMemo(() => {
       const years = new Set(data.map(d => new Date(d.sale_date).getFullYear()))
       years.add(new Date().getFullYear())
-      // Adiciona anos do banco de dados também
       if (financialData) {
           Object.keys(financialData).forEach(key => {
               const y = parseInt(key.split('-')[0])
@@ -45,17 +44,25 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
          setGlobalConfig(gConfig || { tax_rate: 6, default_rate: 1.5, commission_rate: 0 })
       }
 
-      const { data: dbData } = await supabase.from('financial_monthly_data').select('*')
+      // CORREÇÃO CRUCIAL: Ordenamos por ID ascendente.
+      // Assim, se houver duplicatas, o registro mais novo (maior ID) será processado por último
+      // e vai sobrescrever os antigos no mapa.
+      const { data: dbData } = await supabase
+        .from('financial_monthly_data')
+        .select('*')
+        .order('id', { ascending: true }) 
+
       const map: Record<string, any> = {}
       if (dbData) {
-          dbData.forEach((row: any) => { map[row.month_key] = row })
+          dbData.forEach((row: any) => { 
+              map[row.month_key] = row // O último (mais novo) vence
+          })
       }
       setFinancialData(map)
       setLastUpdate(new Date().toLocaleTimeString())
       setLoading(false)
   }, [])
 
-  // Recarrega ao abrir a aba
   useEffect(() => {
       if (isVisible) {
           fetchFinancials()
@@ -68,9 +75,9 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
       return months.map(month => {
           const monthKey = `${selectedYear}-${String(month).padStart(2, '0')}`
           const dbRow = financialData[monthKey]
-          const hasDbData = !!dbRow // Verifica se existe registro no banco
+          const hasDbData = !!dbRow
 
-          // --- 1. DADOS DA PLANILHA (CSV) ---
+          // 1. Dados CSV
           const salesInMonth = data.filter(d => {
               const date = new Date(d.sale_date)
               return date.getFullYear() === selectedYear && (date.getMonth() + 1) === month
@@ -80,43 +87,37 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
           const csvCostFreight = salesInMonth.reduce((acc, item) => acc + (item.freight || 0), 0)
           const csvRevenueGross = csvRevenue + csvCostFreight
 
-          // --- 2. CONFIGURAÇÕES PADRÃO ---
+          // 2. Configs Padrão
           const defTax = globalConfig?.tax_rate ?? 6.0
           const defDef = globalConfig?.default_rate ?? 1.5
           const defComm = globalConfig?.commission_rate ?? 0
 
           let revenue, costChapa, costFreight, taxRate, defRate, commRate, otherVar, fixedCost
 
-          // --- 3. LÓGICA DE DECISÃO (AQUI ESTÁ A CORREÇÃO) ---
-          
+          // 3. Lógica de Decisão (Prioridade ao Banco no Simulado)
           if (viewMode === 'REAL') {
-              // Cenário Real: Usa CSV. Se não tiver CSV, tenta ver se tem algo salvo manualmente como "Real" no banco.
               revenue = csvRevenueGross
               costChapa = csvCostChapa
               costFreight = csvCostFreight
-              
-              // Parâmetros e Custos Extras vêm do banco (ou padrão)
               taxRate = hasDbData && dbRow.tax_rate !== null ? Number(dbRow.tax_rate) : defTax
               defRate = hasDbData && dbRow.default_rate !== null ? Number(dbRow.default_rate) : defDef
               commRate = hasDbData && dbRow.commission_rate !== null ? Number(dbRow.commission_rate) : defComm
               otherVar = hasDbData ? (Number(dbRow.variable_cost) || 0) : 0
               fixedCost = hasDbData && dbRow.fixed_cost !== null ? Number(dbRow.fixed_cost) : 85000
-
           } else {
-              // Cenário Simulado: PRIORIDADE TOTAL AO BANCO (colunas sim_*)
-              
+              // SIMULADO
               // Receita
               if (hasDbData && dbRow.sim_revenue !== null) revenue = Number(dbRow.sim_revenue)
-              else revenue = csvRevenueGross // Fallback para CSV se não editou
+              else revenue = csvRevenueGross
 
-              // Custos Variáveis
+              // Custos
               if (hasDbData && dbRow.sim_cost_chapa !== null) costChapa = Number(dbRow.sim_cost_chapa)
               else costChapa = csvCostChapa
 
               if (hasDbData && dbRow.sim_cost_freight !== null) costFreight = Number(dbRow.sim_cost_freight)
               else costFreight = csvCostFreight
 
-              // Taxas (%)
+              // Taxas
               if (hasDbData && dbRow.sim_tax_rate !== null) taxRate = Number(dbRow.sim_tax_rate)
               else taxRate = (hasDbData && dbRow.tax_rate !== null) ? Number(dbRow.tax_rate) : defTax
 
@@ -126,7 +127,7 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
               if (hasDbData && dbRow.sim_commission_rate !== null) commRate = Number(dbRow.sim_commission_rate)
               else commRate = (hasDbData && dbRow.commission_rate !== null) ? Number(dbRow.commission_rate) : defComm
 
-              // Custos Fixos/Outros (Simulado)
+              // Fixos/Outros
               if (hasDbData && dbRow.sim_variable_cost !== null) otherVar = Number(dbRow.sim_variable_cost)
               else otherVar = hasDbData ? (Number(dbRow.variable_cost) || 0) : 0
 
@@ -134,7 +135,6 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
               else fixedCost = hasDbData && dbRow.fixed_cost !== null ? Number(dbRow.fixed_cost) : 85000
           }
 
-          // --- 4. CÁLCULOS FINAIS ---
           const valTax = revenue * (taxRate / 100)
           const valDef = revenue * (defRate / 100)
           const netRevenue = revenue - valTax - valDef
@@ -201,15 +201,12 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
          </div>
       </div>
       
-      {/* Gráfico */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm h-72">
-          {loading && Object.keys(financialData).length === 0 ? 
-            <div className="h-full flex items-center justify-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin"/></div> : 
+          {loading && Object.keys(financialData).length === 0 ? <div className="h-full flex items-center justify-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin"/></div> : 
             <Bar data={chartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' as const } }, scales: { y: { grid: { display: true, color: '#f1f5f9' } }, x: { grid: { display: false } } } }} />
           }
       </div>
 
-      {/* Tabela */}
       <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
               <table className="w-full text-xs text-left whitespace-nowrap">
