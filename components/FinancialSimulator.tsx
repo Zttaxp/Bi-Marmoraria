@@ -48,8 +48,6 @@ export default function FinancialSimulator({
   const [globalTax, setGlobalTax] = useState(6.00)
   const [globalDefault, setGlobalDefault] = useState(1.50)
   const [globalCommission, setGlobalCommission] = useState(0)
-  
-  // --- CORREÇÃO AQUI: Estado que estava faltando ---
   const [isSavingGlobal, setIsSavingGlobal] = useState(false)
   
   const [baseFixedCost, setBaseFixedCost] = useState(85000) 
@@ -66,7 +64,6 @@ export default function FinancialSimulator({
   const [simFixedCost, setSimFixedCost] = useState(85000)
   const [simOtherVarCost, setSimOtherVarCost] = useState(0)
 
-  // isSavingMonth renomeado para isSaving para simplificar no uso interno, mas mantendo lógica
   const [isSaving, setIsSaving] = useState(false) 
   const [isLoading, setIsLoading] = useState(false)
 
@@ -88,7 +85,7 @@ export default function FinancialSimulator({
     stateRef.current.simCommissionRate = simCommissionRate
   }, [simRevenue, simCostChapa, simCostFreight, simFixedCost, simOtherVarCost, simTaxRate, simDefaultRate, simCommissionRate])
 
-  // 1. CARREGAR DADOS (Correção de Duplicatas)
+  // 1. CARREGAR DADOS (Correção: Ordenação por ID Descendente)
   useEffect(() => {
     const loadData = async () => {
         if (!monthKey) return
@@ -109,11 +106,14 @@ export default function FinancialSimulator({
         const gComm = Number(globalConfig.commission_rate)
         setGlobalTax(gTax); setGlobalDefault(gDef); setGlobalCommission(gComm)
 
-        // B. Carregar Dados do Mês (ROBUSTO CONTRA DUPLICATAS)
+        // B. Carregar Dados do Mês
+        // AQUI ESTÁ A MÁGICA: .order('id', { ascending: false })
+        // Isso garante que pegamos o registro MAIS NOVO (maior ID) se houver duplicatas.
         const { data: monthDataList } = await supabase
             .from('financial_monthly_data')
             .select('*')
             .eq('month_key', monthKey)
+            .order('id', { ascending: false }) 
             .limit(1) 
         
         const monthData = monthDataList && monthDataList.length > 0 ? monthDataList[0] : null
@@ -314,13 +314,9 @@ export default function FinancialSimulator({
               </div>
           </div>
       </div>
-      
       <div className="flex justify-center mt-4">
-          <div className={`px-6 py-2 rounded-full font-bold text-sm shadow-sm flex items-center gap-2 ${diffProfit >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-              Impacto da Simulação: {diffProfit > 0 ? <TrendingUp size={16}/> : <TrendingDown size={16}/>} {diffProfit > 0 ? '+' : ''}{diffProfit.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-          </div>
+          <div className={`px-6 py-2 rounded-full font-bold text-sm shadow-sm flex items-center gap-2 ${diffProfit >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>Impacto da Simulação: {diffProfit > 0 ? <TrendingUp size={16}/> : <TrendingDown size={16}/>} {diffProfit > 0 ? '+' : ''}{diffProfit.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
       </div>
-
     </div>
   )
 }
@@ -329,13 +325,7 @@ function GlobalInput({ label, value, onChange }: any) {
     return (
         <div className="bg-slate-700 p-3 rounded-lg border border-slate-600">
             <label className="text-xs font-bold text-slate-300 uppercase block mb-1">{label}</label>
-            <input 
-                type="number" 
-                step="0.01"
-                value={value}
-                onChange={e => onChange(parseFloat(e.target.value) || 0)}
-                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white font-bold focus:ring-2 focus:ring-cyan-500 outline-none"
-            />
+            <input type="number" step="0.01" value={value} onChange={e => onChange(parseFloat(e.target.value) || 0)} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white font-bold focus:ring-2 focus:ring-cyan-500 outline-none" />
         </div>
     )
 }
