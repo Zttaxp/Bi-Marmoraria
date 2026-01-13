@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { CalendarDays, ArrowRightLeft, Loader2, Download } from 'lucide-react'
+import { CalendarDays, ArrowRightLeft, Loader2, Download, RefreshCw } from 'lucide-react'
 import { createClient } from '../app/utils/supabase/client'
 import { Bar } from 'react-chartjs-2'
 import {
@@ -11,7 +11,6 @@ import * as XLSX from 'xlsx'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
-// Adicionamos a prop isVisible
 export default function AnnualReport({ data, isVisible }: { data: any[], isVisible: boolean }) {
   const supabase = createClient()
   
@@ -19,42 +18,46 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
   const [viewMode, setViewMode] = useState<'REAL' | 'SIM'>('REAL')
   const [financialData, setFinancialData] = useState<Record<string, any>>({})
   const [globalConfig, setGlobalConfig] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false) // Começa false pois o fetch inicial será no useEffect
 
+  // Calcula anos disponíveis baseando-se na planilha E no ano atual
   const availableYears = useMemo(() => {
       const years = new Set(data.map(d => new Date(d.sale_date).getFullYear()))
-      if (years.size === 0) years.add(new Date().getFullYear())
-      return Array.from(years).sort((a, b) => b - a)
-  }, [data])
-
-  useEffect(() => {
-      if (availableYears.length > 0 && !availableYears.includes(selectedYear)) {
-          setSelectedYear(availableYears[0])
+      years.add(new Date().getFullYear()) // Garante que o ano atual sempre apareça
+      if (financialData) {
+          // Adiciona anos que tenham dados salvos no banco também
+          Object.keys(financialData).forEach(key => {
+              const y = parseInt(key.split('-')[0])
+              if (!isNaN(y)) years.add(y)
+          })
       }
-  }, [availableYears, selectedYear])
+      return Array.from(years).sort((a, b) => b - a)
+  }, [data, financialData])
 
-  // Função de busca de dados isolada para poder ser chamada novamente
+  // Busca dados do banco
   const fetchFinancials = useCallback(async () => {
-      // Não ativamos setLoading(true) aqui para não piscar a tela se já tiver dados
-      // Apenas atualizamos os números silenciosamente
+      setLoading(true)
       
       const { data: { user } } = await supabase.auth.getUser()
-      
       if (user) {
-         const { data: gConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).single()
+         const { data: gConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).maybeSingle()
          setGlobalConfig(gConfig || { tax_rate: 6, default_rate: 1.5, commission_rate: 0 })
       }
 
       const { data: dbData } = await supabase.from('financial_monthly_data').select('*')
+      
       const map: Record<string, any> = {}
       if (dbData) {
-          dbData.forEach((row: any) => { map[row.month_key] = row })
+          dbData.forEach((row: any) => { 
+              // Garante formato YYYY-MM
+              map[row.month_key] = row 
+          })
       }
       setFinancialData(map)
       setLoading(false)
-  }, [supabase])
+  }, [])
 
-  // Efeito principal: roda na montagem E quando a aba se torna visível
+  // Atualiza sempre que a aba fica visível
   useEffect(() => {
       if (isVisible) {
           fetchFinancials()
@@ -65,6 +68,7 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
       const months = Array.from({ length: 12 }, (_, i) => i + 1)
       
       return months.map(month => {
+          // Gera chave YYYY-MM (ex: 2025-02)
           const monthKey = `${selectedYear}-${String(month).padStart(2, '0')}`
           const dbRow = financialData[monthKey] || {}
           
@@ -72,6 +76,7 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
           const defDef = globalConfig?.default_rate ?? 1.5
           const defComm = globalConfig?.commission_rate ?? 0
 
+          // Vendas da Planilha (CSV)
           const salesInMonth = data.filter(d => {
               const date = new Date(d.sale_date)
               return date.getFullYear() === selectedYear && (date.getMonth() + 1) === month
@@ -87,6 +92,7 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
           const dbFixed = dbRow.fixed_cost !== undefined && dbRow.fixed_cost !== null ? Number(dbRow.fixed_cost) : 85000
           
           if (viewMode === 'REAL') {
+              // Modo Real: Prioriza CSV, mas usa DB para custos fixos/variáveis extras
               revenue = csvRevenueGross
               costChapa = csvCostChapa
               costFreight = csvCostFreight
@@ -96,12 +102,15 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
               otherVar = Number(dbRow.variable_cost) || 0
               fixedCost = dbFixed
           } else {
-              revenue = dbRow.sim_revenue !== undefined ? Number(dbRow.sim_revenue) : csvRevenueGross
-              costChapa = dbRow.sim_cost_chapa !== undefined ? Number(dbRow.sim_cost_chapa) : csvCostChapa
-              costFreight = dbRow.sim_cost_freight !== undefined ? Number(dbRow.sim_cost_freight) : csvCostFreight
+              // Modo Simulado: Prioriza TOTALMENTE o banco de dados (sim_...) se existir
+              revenue = dbRow.sim_revenue !== undefined && dbRow.sim_revenue !== null ? Number(dbRow.sim_revenue) : csvRevenueGross
+              costChapa = dbRow.sim_cost_chapa !== undefined && dbRow.sim_cost_chapa !== null ? Number(dbRow.sim_cost_chapa) : csvCostChapa
+              costFreight = dbRow.sim_cost_freight !== undefined && dbRow.sim_cost_freight !== null ? Number(dbRow.sim_cost_freight) : csvCostFreight
+              
               taxRate = dbRow.sim_tax_rate !== undefined ? Number(dbRow.sim_tax_rate) : (dbRow.tax_rate !== undefined ? Number(dbRow.tax_rate) : defTax)
               defRate = dbRow.sim_default_rate !== undefined ? Number(dbRow.sim_default_rate) : (dbRow.default_rate !== undefined ? Number(dbRow.default_rate) : defDef)
               commRate = dbRow.sim_commission_rate !== undefined ? Number(dbRow.sim_commission_rate) : (dbRow.commission_rate !== undefined ? Number(dbRow.commission_rate) : defComm)
+              
               otherVar = dbRow.sim_variable_cost !== undefined ? Number(dbRow.sim_variable_cost) : (Number(dbRow.variable_cost) || 0)
               
               const simFixDB = dbRow.sim_fixed_cost !== undefined && dbRow.sim_fixed_cost !== null ? Number(dbRow.sim_fixed_cost) : null
@@ -153,14 +162,20 @@ export default function AnnualReport({ data, isVisible }: { data: any[], isVisib
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-         <div className="flex items-center gap-4">
+         <div className="flex items-center gap-4 flex-wrap">
              <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
                  <button onClick={() => setViewMode('REAL')} className={`px-4 py-2 text-sm font-bold rounded-md transition-all flex items-center gap-2 ${viewMode === 'REAL' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}><CalendarDays size={16}/> Cenário Real</button>
                  <button onClick={() => setViewMode('SIM')} className={`px-4 py-2 text-sm font-bold rounded-md transition-all flex items-center gap-2 ${viewMode === 'SIM' ? 'bg-cyan-50 text-cyan-700 shadow-sm border border-cyan-100' : 'text-slate-400 hover:text-slate-600'}`}><ArrowRightLeft size={16}/> Cenário Simulado</button>
              </div>
-             <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="bg-slate-50 border border-slate-200 text-slate-700 text-sm font-bold rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-cyan-500">
-                 {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
-             </select>
+             
+             <div className="flex gap-2">
+                <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="bg-slate-50 border border-slate-200 text-slate-700 text-sm font-bold rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-cyan-500">
+                    {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <button onClick={fetchFinancials} className="p-2.5 bg-slate-50 text-slate-500 hover:text-cyan-600 hover:bg-cyan-50 border border-slate-200 rounded-lg transition-colors" title="Atualizar Dados">
+                    <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+                </button>
+             </div>
          </div>
          <div className="flex gap-4 items-center">
              <div className="text-right"><span className="text-xs font-bold text-slate-400 uppercase">Lucro Anual</span><div className={`text-xl font-bold ${yearTotals.netProfit >= 0 ? 'text-slate-800' : 'text-red-500'}`}>{fmt(yearTotals.netProfit)}</div></div>
