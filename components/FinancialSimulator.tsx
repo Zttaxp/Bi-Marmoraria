@@ -29,9 +29,10 @@ export default function FinancialSimulator({
   
   const supabase = createClient()
   
-  // --- STATE REF (Proteção contra bugs de edição e Identificação de Linha) ---
+  // --- STATE REF ---
+  // Mantemos o ID aqui apenas para controle interno, mas NÃO o enviaremos no save
   const stateRef = useRef({
-      id: null as number | null, // Guarda o ID da linha para referência
+      id: null as number | null, 
       simRevenue: grossRevenue,
       simCostChapa: costChapa,
       simCostFreight: costFreight,
@@ -68,7 +69,7 @@ export default function FinancialSimulator({
   const [isSaving, setIsSaving] = useState(false) 
   const [isLoading, setIsLoading] = useState(false)
 
-  // Sincronizações de REF (Mantém a REF atualizada com props/states para leituras passivas)
+  // Sincronizações de REF
   useEffect(() => {
     stateRef.current.realRevenue = grossRevenue
     stateRef.current.realChapa = costChapa
@@ -91,7 +92,7 @@ export default function FinancialSimulator({
     const loadData = async () => {
         if (!monthKey) return
         setIsLoading(true)
-        stateRef.current.id = null // Reset ID ao trocar de mês
+        stateRef.current.id = null 
         
         const { data: { user } } = await supabase.auth.getUser()
         if(!user) return
@@ -120,7 +121,7 @@ export default function FinancialSimulator({
         
         if (monthData) {
             // === DADO ENCONTRADO ===
-            stateRef.current.id = monthData.id // Captura o ID existente
+            stateRef.current.id = monthData.id 
 
             setBaseFixedCost(monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
             setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
@@ -140,13 +141,12 @@ export default function FinancialSimulator({
             setSimRevenue(sRev); setSimCostChapa(sChapa); setSimCostFreight(sFreight)
 
         } else {
-            // === MÊS NOVO (Criar imediatamente para garantir integridade) ===
+            // === MÊS NOVO ===
             setBaseFixedCost(85000); setBaseOtherVarCost(0)
             setSimTaxRate(gTax); setSimDefaultRate(gDef); setSimCommissionRate(gComm)
             setSimFixedCost(85000); setSimOtherVarCost(0)
             setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight)
 
-            // Tenta criar, mas se já existir (concorrência), não tem problema pois o upsert depois resolve
             const { data: newData } = await supabase.from('financial_monthly_data').insert({
                 user_id: user.id, month_key: monthKey,
                 tax_rate: gTax, default_rate: gDef, commission_rate: gComm,
@@ -163,7 +163,7 @@ export default function FinancialSimulator({
     loadData()
   }, [monthKey]) 
 
-  // 2. FUNÇÃO DE SALVAR ROBUSTA (CORRIGIDA)
+  // 2. FUNÇÃO DE SALVAR ROBUSTA (SEM ID NO PAYLOAD)
   const performSave = useCallback(async (updates: any = {}) => {
       if (!monthKey) return
       setIsSaving(true)
@@ -176,16 +176,13 @@ export default function FinancialSimulator({
               user_id: user.id,
               month_key: monthKey,
               
-              // Globais
               tax_rate: globalTax, 
               default_rate: globalDefault, 
               commission_rate: globalCommission,
 
-              // Reais (Prioriza update explícito > state)
               fixed_cost: updates.realFix !== undefined ? updates.realFix : baseFixedCost,
               variable_cost: updates.realVar !== undefined ? updates.realVar : baseOtherVarCost,
               
-              // Simulados (Prioriza update explícito > ref atual)
               sim_revenue: updates.revenue !== undefined ? updates.revenue : current.simRevenue,
               sim_cost_chapa: updates.chapa !== undefined ? updates.chapa : current.simCostChapa,
               sim_cost_freight: updates.freight !== undefined ? updates.freight : current.simCostFreight,
@@ -197,12 +194,10 @@ export default function FinancialSimulator({
               sim_commission_rate: updates.comm !== undefined ? updates.comm : current.simCommissionRate
           }
 
-          if (current.id) {
-              payload.id = current.id
-          }
+          // FIX: REMOVIDO 'payload.id = current.id'. 
+          // O upsert encontrará a linha via (user_id, month_key) e fará update.
+          // Isso evita o erro de PKEY violation.
 
-          // FIX CRÍTICO: Usar 'user_id, month_key' como chave de conflito
-          // Isso garante que se o registro já existir, ele será ATUALIZADO, não duplicado.
           const { data, error } = await supabase
               .from('financial_monthly_data')
               .upsert(payload, { onConflict: 'user_id, month_key' }) 
@@ -229,12 +224,11 @@ export default function FinancialSimulator({
       setIsSavingGlobal(false)
   }
 
-  // --- HANDLERS (Com atualização direta da Ref + Updates Explícitos) ---
+  // --- HANDLERS ---
   
   const updateSimVal = (val: number, setter: any, field: string) => {
       setter(val)
       
-      // Atualiza Ref imediatamente
       if(field === 'revenue') stateRef.current.simRevenue = val
       if(field === 'chapa') stateRef.current.simCostChapa = val
       if(field === 'freight') stateRef.current.simCostFreight = val
