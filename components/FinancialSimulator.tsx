@@ -85,7 +85,7 @@ export default function FinancialSimulator({
     stateRef.current.simCommissionRate = simCommissionRate
   }, [simRevenue, simCostChapa, simCostFreight, simFixedCost, simOtherVarCost, simTaxRate, simDefaultRate, simCommissionRate])
 
-  // 1. CARREGAR DADOS (Correção: Ordenação por ID Descendente)
+  // 1. CARREGAR DADOS
   useEffect(() => {
     const loadData = async () => {
         if (!monthKey) return
@@ -107,8 +107,6 @@ export default function FinancialSimulator({
         setGlobalTax(gTax); setGlobalDefault(gDef); setGlobalCommission(gComm)
 
         // B. Carregar Dados do Mês
-        // AQUI ESTÁ A MÁGICA: .order('id', { ascending: false })
-        // Isso garante que pegamos o registro MAIS NOVO (maior ID) se houver duplicatas.
         const { data: monthDataList } = await supabase
             .from('financial_monthly_data')
             .select('*')
@@ -197,21 +195,36 @@ export default function FinancialSimulator({
       setIsSavingGlobal(false)
   }
 
-  // --- HANDLERS ---
+  // --- HANDLERS CORRIGIDOS ---
+  
   const updateSimVal = (val: number, setter: any, field: string) => {
       setter(val)
+      
+      // FIX: Atualizar a Ref IMEDIATAMENTE para evitar condição de corrida
       if(field === 'revenue') stateRef.current.simRevenue = val
+      if(field === 'chapa') stateRef.current.simCostChapa = val
+      if(field === 'freight') stateRef.current.simCostFreight = val
+      if(field === 'fix') stateRef.current.simFixedCost = val
+      if(field === 'otherVar') stateRef.current.simOtherVarCost = val
+
       const updates: any = {}
       if(field === 'revenue') updates.revenue = val
       if(field === 'chapa') updates.chapa = val
       if(field === 'freight') updates.freight = val
       if(field === 'fix') updates.fix = val
       if(field === 'otherVar') updates.otherVar = val
+      
       performSave(updates)
   }
 
   const updateSimPct = (val: number, setter: any, field: string) => {
       setter(val)
+
+      // FIX: Atualizar a Ref IMEDIATAMENTE
+      if(field === 'tax') stateRef.current.simTaxRate = val
+      if(field === 'def') stateRef.current.simDefaultRate = val
+      if(field === 'comm') stateRef.current.simCommissionRate = val
+
       const updates: any = {}
       if(field === 'tax') updates.tax = val
       if(field === 'def') updates.def = val
@@ -222,7 +235,14 @@ export default function FinancialSimulator({
   const updateSimValFromPct = (val: number, setterPct: any, field: string) => {
       const rev = stateRef.current.simRevenue
       const newPct = rev > 0 ? (val / rev) * 100 : 0
+      
       setterPct(newPct)
+
+      // FIX: Atualizar a Ref IMEDIATAMENTE
+      if(field === 'tax') stateRef.current.simTaxRate = newPct
+      if(field === 'def') stateRef.current.simDefaultRate = newPct
+      if(field === 'comm') stateRef.current.simCommissionRate = newPct
+
       const updates: any = {}
       if(field === 'tax') updates.tax = newPct
       if(field === 'def') updates.def = newPct
