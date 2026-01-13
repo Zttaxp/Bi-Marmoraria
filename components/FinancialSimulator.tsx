@@ -29,9 +29,7 @@ export default function FinancialSimulator({
   
   const supabase = createClient()
   
-  // --- STATE REF PATTERN (A Solução para o erro de edição) ---
-  // Criamos uma referência que guarda os valores atuais "fora" do ciclo de renderização do React.
-  // Isso impede que a função de salvar pegue valores antigos (Stale Closure).
+  // --- STATE REF (Proteção contra bugs de edição) ---
   const stateRef = useRef({
       simRevenue: grossRevenue,
       simCostChapa: costChapa,
@@ -41,7 +39,6 @@ export default function FinancialSimulator({
       simTaxRate: 6.0,
       simDefaultRate: 1.5,
       simCommissionRate: 0,
-      // Fallbacks
       realRevenue: grossRevenue,
       realChapa: costChapa,
       realFreight: costFreight
@@ -51,15 +48,13 @@ export default function FinancialSimulator({
   const [globalTax, setGlobalTax] = useState(6.00)
   const [globalDefault, setGlobalDefault] = useState(1.50)
   const [globalCommission, setGlobalCommission] = useState(0)
+  
+  // --- CORREÇÃO AQUI: Estado que estava faltando ---
   const [isSavingGlobal, setIsSavingGlobal] = useState(false)
-  const [isSavingMonth, setIsSavingMonth] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-
-  // --- DADOS REAIS / BASE ---
+  
   const [baseFixedCost, setBaseFixedCost] = useState(85000) 
   const [baseOtherVarCost, setBaseOtherVarCost] = useState(0) 
 
-  // --- DADOS SIMULADOS ---
   const [simRevenue, setSimRevenue] = useState(grossRevenue)
   const [simCostChapa, setSimCostChapa] = useState(costChapa)
   const [simCostFreight, setSimCostFreight] = useState(costFreight)
@@ -71,14 +66,17 @@ export default function FinancialSimulator({
   const [simFixedCost, setSimFixedCost] = useState(85000)
   const [simOtherVarCost, setSimOtherVarCost] = useState(0)
 
-  // Sincroniza a REF com as Props (Caso a planilha mude)
+  // isSavingMonth renomeado para isSaving para simplificar no uso interno, mas mantendo lógica
+  const [isSaving, setIsSaving] = useState(false) 
+  const [isLoading, setIsLoading] = useState(false)
+
+  // Sincronizações de REF
   useEffect(() => {
     stateRef.current.realRevenue = grossRevenue
     stateRef.current.realChapa = costChapa
     stateRef.current.realFreight = costFreight
   }, [grossRevenue, costChapa, costFreight])
 
-  // Sincroniza a REF com o Estado Visual (Sempre que você digita)
   useEffect(() => {
     stateRef.current.simRevenue = simRevenue
     stateRef.current.simCostChapa = simCostChapa
@@ -90,7 +88,7 @@ export default function FinancialSimulator({
     stateRef.current.simCommissionRate = simCommissionRate
   }, [simRevenue, simCostChapa, simCostFreight, simFixedCost, simOtherVarCost, simTaxRate, simDefaultRate, simCommissionRate])
 
-  // 1. CARREGAR DADOS (Carregamento Blindado)
+  // 1. CARREGAR DADOS (Correção de Duplicatas)
   useEffect(() => {
     const loadData = async () => {
         if (!monthKey) return
@@ -101,36 +99,37 @@ export default function FinancialSimulator({
 
         // A. Carregar Config Global
         let { data: globalConfig } = await supabase.from('financial_global_config').select('*').eq('user_id', user.id).maybeSingle()
-        
         if (!globalConfig) {
             const defaults = { user_id: user.id, tax_rate: 6.0, default_rate: 1.5, commission_rate: 0 }
             await supabase.from('financial_global_config').insert(defaults)
             globalConfig = defaults
         }
-
         const gTax = Number(globalConfig.tax_rate)
         const gDef = Number(globalConfig.default_rate)
         const gComm = Number(globalConfig.commission_rate)
-
         setGlobalTax(gTax); setGlobalDefault(gDef); setGlobalCommission(gComm)
 
-        // B. Carregar Dados do Mês (Prioridade ao Banco)
-        const { data: monthData } = await supabase.from('financial_monthly_data').select('*').eq('month_key', monthKey).maybeSingle()
+        // B. Carregar Dados do Mês (ROBUSTO CONTRA DUPLICATAS)
+        const { data: monthDataList } = await supabase
+            .from('financial_monthly_data')
+            .select('*')
+            .eq('month_key', monthKey)
+            .limit(1) 
+        
+        const monthData = monthDataList && monthDataList.length > 0 ? monthDataList[0] : null
         
         if (monthData) {
             // === DADO ENCONTRADO ===
-            // Carrega Reais salvos
             setBaseFixedCost(monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
             setBaseOtherVarCost(Number(monthData.variable_cost) || 0)
 
-            // Carrega Simulados (Prioridade: Banco -> Global/Real)
             setSimTaxRate(monthData.sim_tax_rate ?? gTax)
             setSimDefaultRate(monthData.sim_default_rate ?? gDef)
             setSimCommissionRate(monthData.sim_commission_rate ?? gComm)
 
             const sFix = monthData.sim_fixed_cost !== null ? Number(monthData.sim_fixed_cost) : (monthData.fixed_cost !== null ? Number(monthData.fixed_cost) : 85000)
             const sVar = monthData.sim_variable_cost !== null ? Number(monthData.sim_variable_cost) : (Number(monthData.variable_cost) || 0)
-            // Se o valor simulado for nulo no banco, usa o Real da planilha (props)
+            
             const sRev = monthData.sim_revenue !== null ? Number(monthData.sim_revenue) : grossRevenue
             const sChapa = monthData.sim_cost_chapa !== null ? Number(monthData.sim_cost_chapa) : costChapa
             const sFreight = monthData.sim_cost_freight !== null ? Number(monthData.sim_cost_freight) : costFreight
@@ -139,15 +138,12 @@ export default function FinancialSimulator({
             setSimRevenue(sRev); setSimCostChapa(sChapa); setSimCostFreight(sFreight)
 
         } else {
-            // === MÊS NOVO (Sem registro) ===
-            // Inicializa visualmente com os dados da planilha
+            // === MÊS NOVO ===
             setBaseFixedCost(85000); setBaseOtherVarCost(0)
-            
             setSimTaxRate(gTax); setSimDefaultRate(gDef); setSimCommissionRate(gComm)
             setSimFixedCost(85000); setSimOtherVarCost(0)
             setSimRevenue(grossRevenue); setSimCostChapa(costChapa); setSimCostFreight(costFreight)
 
-            // CRIA O REGISTRO INICIAL (Isso corrige o erro de não aparecer na aba anual)
             await supabase.from('financial_monthly_data').insert({
                 user_id: user.id, month_key: monthKey,
                 tax_rate: gTax, default_rate: gDef, commission_rate: gComm,
@@ -160,28 +156,22 @@ export default function FinancialSimulator({
         setIsLoading(false)
     }
     loadData()
-    // IMPORTANTE: Dependência única 'monthKey' impede recarregamentos acidentais ao mudar planilha
   }, [monthKey]) 
 
-  // 2. FUNÇÃO DE SALVAMENTO (Agora lê da REF, impossível estar "velha")
+  // 2. FUNÇÃO DE SALVAR
   const performSave = useCallback(async (updates: any = {}) => {
       if (!monthKey) return
-      setIsSavingMonth(true)
+      setIsSaving(true)
 
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
-          // Pega valores da REF (estado atual seguro)
           const current = stateRef.current
-          
-          // O truque: Se o update tiver o valor específico, usa ele. Se não, usa o da REF.
           const payload = {
               user_id: user.id,
               month_key: monthKey,
-              // Mantém parâmetros globais/reais atuais
               tax_rate: globalTax, default_rate: globalDefault, commission_rate: globalCommission,
               fixed_cost: baseFixedCost, variable_cost: baseOtherVarCost,
-
-              // Simulados
+              
               sim_revenue: updates.revenue !== undefined ? updates.revenue : current.simRevenue,
               sim_cost_chapa: updates.chapa !== undefined ? updates.chapa : current.simCostChapa,
               sim_cost_freight: updates.freight !== undefined ? updates.freight : current.simCostFreight,
@@ -191,10 +181,9 @@ export default function FinancialSimulator({
               sim_default_rate: updates.def !== undefined ? updates.def : current.simDefaultRate,
               sim_commission_rate: updates.comm !== undefined ? updates.comm : current.simCommissionRate
           }
-          
           await supabase.from('financial_monthly_data').upsert(payload, { onConflict: 'user_id, month_key' })
       }
-      setTimeout(() => setIsSavingMonth(false), 500)
+      setTimeout(() => setIsSaving(false), 500)
   }, [monthKey, globalTax, globalDefault, globalCommission, baseFixedCost, baseOtherVarCost])
 
   // 3. SALVAR GLOBAIS
@@ -203,17 +192,15 @@ export default function FinancialSimulator({
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
       await supabase.from('financial_global_config').upsert({ user_id: user.id, tax_rate: globalTax, default_rate: globalDefault, commission_rate: globalCommission })
-      // Atualiza o mês atual também
       await performSave({ tax: globalTax, def: globalDefault, comm: globalCommission }) 
+      setSimTaxRate(globalTax); setSimDefaultRate(globalDefault); setSimCommissionRate(globalCommission)
       setIsSavingGlobal(false)
   }
 
-  // --- HANDLERS (Simples e Diretos) ---
+  // --- HANDLERS ---
   const updateSimVal = (val: number, setter: any, field: string) => {
-      setter(val) // Atualiza visual instantâneo
-      // Atualiza REF instantâneo (segurança dupla)
+      setter(val)
       if(field === 'revenue') stateRef.current.simRevenue = val
-      
       const updates: any = {}
       if(field === 'revenue') updates.revenue = val
       if(field === 'chapa') updates.chapa = val
@@ -232,7 +219,6 @@ export default function FinancialSimulator({
       performSave(updates)
   }
   
-  // Handler especial para editar Valor Monetário de impostos e recalcular %
   const updateSimValFromPct = (val: number, setterPct: any, field: string) => {
       const rev = stateRef.current.simRevenue
       const newPct = rev > 0 ? (val / rev) * 100 : 0
@@ -252,12 +238,10 @@ export default function FinancialSimulator({
   }
 
   const resetValues = () => {
-      // Reseta para Reais (props originais)
       const { realRevenue, realChapa, realFreight } = stateRef.current
       setSimRevenue(realRevenue); setSimCostChapa(realChapa); setSimCostFreight(realFreight)
       setSimTaxRate(globalTax); setSimDefaultRate(globalDefault); setSimCommissionRate(globalCommission)
       setSimFixedCost(baseFixedCost); setSimOtherVarCost(baseOtherVarCost)
-      
       performSave({
           revenue: realRevenue, chapa: realChapa, freight: realFreight,
           tax: globalTax, def: globalDefault, comm: globalCommission,
@@ -283,26 +267,11 @@ export default function FinancialSimulator({
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
-      
       <div className="bg-slate-800 text-white p-4 rounded-xl shadow-md border border-slate-700">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
-              <div className="flex items-center gap-2">
-                  <Settings className="text-cyan-400" />
-                  <div>
-                      <h3 className="font-bold text-lg">Parâmetros do Cenário Real</h3>
-                      <p className="text-xs text-slate-400">Alterações aqui aplicam-se a <strong>TODOS</strong> os meses.</p>
-                  </div>
-              </div>
-              <button 
-                onClick={saveGlobalParams} 
-                disabled={isSavingGlobal}
-                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition disabled:opacity-50"
-              >
-                  {isSavingGlobal ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>}
-                  Salvar Parâmetros Globais
-              </button>
+              <div className="flex items-center gap-2"><Settings className="text-cyan-400" /><div><h3 className="font-bold text-lg">Parâmetros do Cenário Real</h3><p className="text-xs text-slate-400">Alterações aqui aplicam-se a <strong>TODOS</strong> os meses.</p></div></div>
+              <button onClick={saveGlobalParams} disabled={isSavingGlobal} className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition disabled:opacity-50">{isSavingGlobal ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>} Salvar Parâmetros Globais</button>
           </div>
-
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <GlobalInput label="Impostos (%)" value={globalTax} onChange={setGlobalTax} />
               <GlobalInput label="Inadimplência (%)" value={globalDefault} onChange={setGlobalDefault} />
@@ -311,20 +280,8 @@ export default function FinancialSimulator({
       </div>
 
       <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-         <div className="flex items-center gap-4">
-             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                 DRE Mês: {monthKey || 'Selecione'}
-             </h2>
-             {isLoading && <Loader2 className="animate-spin text-cyan-600" size={16} />}
-             {isSavingMonth && (
-                 <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded flex items-center gap-1 animate-pulse">
-                     <Save size={12} /> Salvando...
-                 </span>
-             )}
-         </div>
-         <button onClick={resetValues} className="text-sm font-bold text-slate-500 hover:text-cyan-600 flex items-center gap-2">
-            <RefreshCcw size={14} /> Resetar Simulação
-         </button>
+         <div className="flex items-center gap-4"><h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">DRE Mês: {monthKey || 'Selecione'}</h2>{isLoading && <Loader2 className="animate-spin text-cyan-600" size={16} />}{isSaving && (<span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded flex items-center gap-1 animate-pulse"><Save size={12} /> Salvando...</span>)}</div>
+         <button onClick={resetValues} className="text-sm font-bold text-slate-500 hover:text-cyan-600 flex items-center gap-2"><RefreshCcw size={14} /> Resetar Simulação</button>
       </div>
 
       <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
